@@ -32,8 +32,9 @@ There's no stacking. State lives on the share (`STATE_DIR`).
   the 2025-10-16 FMA135 frames under SadrRegion-IC1318 (a wide field that contains it). For already-archived frames,
   where they are wins; for new wide-field (FMA135) frames, the review screen asks Chris to confirm the target.
 - **Orphan thumbnails exist:** 10 `_thn.jpg` for 2026-06-16 300 s darks whose `.fit` is gone.
-- **Other tools write to the share:** `Plan/Light/NGC 5907/astropup-view-scan.json` (+ `._` file). Unknown files are
-  never deleted, so their folders are never pruned.
+- **Other tools write to the share:** `Plan/Light/NGC 5907/astropup-view-scan.json` (+ `._` file), `.DS_Store` and
+  `._*` files in Autorun/Plan (20 in all), including `._` leftovers of 10 NGC 5907 frames deleted from a Mac. They
+  go on the cleanup screen as "unrecognized", each called out and approved individually.
 - **Frames missing from archived sessions:** 9 dawn Elephant Trunk, 9 dawn Heart, and 4 M42 frames. Chris deleted
   these as poor quality after the manual copy.
 - **New data:**
@@ -53,7 +54,9 @@ There's no stacking. State lives on the share (`STATE_DIR`).
    and never deleted. Leave an opt-in hook for occasional EAA copies, but don't build it yet.
 4. **Source delete removes each `.fit` and its `_thn.jpg` together**, for both copied and already-archived frames.
    The cleanup screen lists both files per frame, and its totals include the thumbnails. Thumbnails left without a
-   `.fit` are also offered for deletion. Then prune empty directories, but never the ASIAIR's structural folders
+   `.fit` are also offered for deletion. So is anything else inside `Autorun/`/`Plan/` (other tools' files such as
+   `astropup-view-scan.json`, `._*` AppleDouble files, `.DS_Store`): each is **listed and called out by name** and
+   deleted only when Chris approves it, like everything else. Nothing is silently ignored. Then prune empty directories, but never the ASIAIR's structural folders
    (`Autorun/Light`, `Plan/Light`, …). Thumbnails are never copied to the archive.
 5. **Calibration completeness gate before any delete.** Before a flat or dark-flat set is offered for deletion, the
    app searches for the lights it belongs to. A set that has lights is useful and gets filed with them, as normal.

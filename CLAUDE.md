@@ -25,6 +25,9 @@ so tell Chris.
    default **append**. Chris wants all data for now; frame-quality rejection may come later.
 8. `Live`, `Preview`, `Video`, `log`, `GuidingDarkLibrary` are ignored unless Chris asks for them. Never delete them.
 9. Source cleanup deletes each `.fit` **and its `_thn.jpg`** thumbnail. Thumbnails are never copied to the archive.
+   Anything else in `Autorun/`/`Plan/` (other tools' files like `astropup-view-scan.json`, `._*`, `.DS_Store`,
+   orphan thumbnails) is **included in cleanup but called out one by one** and deleted only with Chris's approval.
+   Never silently ignore or silently delete a file.
 10. Before any flat or dark-flat set is deleted from the source, look for the lights it belongs to (on the ASIAIR and
     in the archive). If none are found, block its deletion until Chris files or explicitly releases it.
 11. Night date comes from the local timestamp in the ASIAIR filename (minus 12 h), cross-checked against

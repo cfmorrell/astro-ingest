@@ -66,8 +66,10 @@ class SourceFrame:
 class Scan:
     source_label: str
     frames: list[SourceFrame]
-    orphan_thumbs: list[SourceEntry]   # _thn.jpg with no .fit next to it
-    other_files: list[SourceEntry]     # logs, videos, json, …
+    orphan_thumbs: list[SourceEntry]   # _thn.jpg with no .fit next to it (Autorun/Plan)
+    unrecognized: list[SourceEntry]    # anything else in Autorun/Plan (other tools' files, ._*, .DS_Store): offered
+                                       # for cleanup, called out one by one, never deleted without Chris's approval
+    other_files: list[SourceEntry]     # outside Autorun/Plan (logs, videos, junk): never touched
 
     def handled(self) -> list[SourceFrame]:
         return [f for f in self.frames if f.category == "handled"]
@@ -79,18 +81,25 @@ def scan(source: Source, tz: ZoneInfo, read_headers: bool = True,
     by_rel = {e.rel: e for e in entries}
     frames: list[SourceFrame] = []
     orphans: list[SourceEntry] = []
+    unrecognized: list[SourceEntry] = []
     others: list[SourceEntry] = []
 
     for e in entries:
         name = PurePosixPath(e.rel).name
-        if name.endswith(asiair.THUMB_SUFFIX):
-            # Only handled folders: Video/Live thumbnails belong to .avi files and live stacks, not frames
-            if asiair.fit_for_thumb(e.rel) in by_rel:
-                continue
-            (orphans if asiair.folder_category(e.rel) == "handled" else others).append(e)
+        handled = asiair.folder_category(e.rel) == "handled"
+        if name.endswith(asiair.THUMB_SUFFIX) and asiair.fit_for_thumb(e.rel) in by_rel:
+            continue  # paired with its frame
+        if not handled and (asiair.is_junk(name) or not name.lower().endswith(asiair.FIT_SUFFIX)):
+            others.append(e)
+            continue
+        if asiair.is_junk(name):  # ._x.fit is AppleDouble metadata, not a frame
+            unrecognized.append(e)
+            continue
+        if name.endswith(asiair.THUMB_SUFFIX):  # no .fit next to it (Video/Live ones went to other_files above)
+            orphans.append(e)
             continue
         if not name.lower().endswith(asiair.FIT_SUFFIX):
-            others.append(e)
+            unrecognized.append(e)
             continue
         frame = SourceFrame(e, asiair.folder_category(e.rel), asiair.parse_name(name),
                             thumb=by_rel.get(asiair.thumb_for(e.rel)))
@@ -110,7 +119,7 @@ def scan(source: Source, tz: ZoneInfo, read_headers: bool = True,
         if progress:
             progress(i + 1, len(todo))
 
-    return Scan(source.label, frames, orphans, others)
+    return Scan(source.label, frames, orphans, unrecognized, others)
 
 
 def _check(frame: SourceFrame, tz: ZoneInfo) -> None:

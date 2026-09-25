@@ -17,7 +17,8 @@ class Source(Protocol):
     label: str  # shown in the UI and logs, e.g. "local:/astro-sandbox/_asiair-sample" or "smb://192.168.1.43/EMMC Images"
 
     def walk(self) -> Iterator[SourceEntry]:
-        """Every regular file, in a stable order. Skips symlinks, dotfiles and OS junk."""
+        """Every regular file, in a stable order, including dotfiles and OS junk (the scan decides what they are).
+        Never follows or lists symlinks."""
         ...
 
     def open_read(self, rel: str) -> BinaryIO:

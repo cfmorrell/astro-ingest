@@ -26,6 +26,8 @@ def make_asiair(root):
     (root / "Plan/Light/SoulNebula/astropup-view-scan.json").write_text("{}")
     (root / "Plan/Light/SoulNebula/._astropup-view-scan.json").write_bytes(b"junk")
     (root / ".DS_Store").write_bytes(b"junk")
+    (root / "Plan/Light/SoulNebula/._Light_x.fit").write_bytes(b"junk")   # AppleDouble, not a frame
+    (root / "Live/Light/M 13/._Light_x.fit").write_bytes(b"junk")
     write_fits(root / "Plan/Light/SoulNebula/Stacked_weird.fit")
 
 
@@ -55,10 +57,16 @@ def test_scan(tmp_path):
     assert {f.rel.split("/")[0] for f in ignored} == {"Live"} and all(f.header is None for f in ignored)
 
     assert [e.rel.split("/")[-2] for e in result.orphan_thumbs] == ["Dark"]
+    # Other tools' files and OS junk inside Autorun/Plan are listed for cleanup (each needs Chris's approval)
+    assert {e.rel for e in result.unrecognized} == {
+        "Plan/Light/SoulNebula/astropup-view-scan.json",
+        "Plan/Light/SoulNebula/._astropup-view-scan.json",
+        "Plan/Light/SoulNebula/._Light_x.fit",
+    }
+    # Outside Autorun/Plan nothing is ever touched
     others = {e.rel for e in result.other_files}
-    assert "Plan/Light/SoulNebula/astropup-view-scan.json" in others
-    assert "Video/2026-04-11-232244-Jupiter-Bin1 -10.0C_thn.jpg" in others
-    assert not any("/." in e.rel or e.rel.startswith(".") for e in result.other_files + result.orphan_thumbs)
+    assert others == {".DS_Store", "Video/2026-04-11-232244-Jupiter-Bin1 -10.0C_thn.jpg",
+                      "Live/Light/M 13/._Light_x.fit"}
 
 
 def test_scan_without_headers(tmp_path):

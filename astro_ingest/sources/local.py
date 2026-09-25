@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
-from astro_ingest.core.asiair import is_junk
 from astro_ingest.sources.base import SourceEntry
 
 
@@ -17,10 +16,8 @@ class LocalDirSource:
 
     def walk(self) -> Iterator[SourceEntry]:
         for dirpath, dirnames, filenames in os.walk(self.root):  # never follows symlinked dirs
-            dirnames[:] = sorted(d for d in dirnames if not is_junk(d))
+            dirnames.sort()
             for name in sorted(filenames):
-                if is_junk(name):
-                    continue
                 path = Path(dirpath, name)
                 st = path.lstat()
                 if not path.is_file() or path.is_symlink():

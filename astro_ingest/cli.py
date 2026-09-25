@@ -48,6 +48,10 @@ def print_scan(result: Scan, out=sys.stdout) -> None:
           ", ".join(f"{t} {n} frames/{_gb(size_top[t]).strip()}" for t, n in sorted(by_top.items())))
     if result.orphan_thumbs:
         w(f"Thumbnails without a .fit: {len(result.orphan_thumbs)}")
+    if result.unrecognized:
+        w(f"Unrecognized files in Autorun/Plan (offered for cleanup, each needs approval): {len(result.unrecognized)}")
+        for e in result.unrecognized:
+            w(f"    {e.rel}  ({e.size} bytes)")
     if result.other_files:
         tops = Counter(e.rel.split("/")[0] for e in result.other_files)
         w("Other files (not frames): " + ", ".join(f"{t} {n}" for t, n in sorted(tops.items())))
