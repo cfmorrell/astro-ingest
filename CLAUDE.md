@@ -63,6 +63,9 @@ Web port: container `8000` → host `8090`. Config comes from env vars (see `.en
 the repo's `.env`): `ASTRO_ROOT` (write target), `ASTRO_NAS` (old name `ASTRO_ARCHIVE` still accepted), `STATE_DIR`, `TZ`, `ASIAIR_ROOT`, `ASIAIR_SUBNET`,
 `ASIAIR_SHARE`, `ASIAIR_HOST`. **Never hard-code paths.** Python deps live in `/workspace/.venv`
 (`python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`); run tests with `.venv/bin/pytest`.
+To see the UI, run `.venv/bin/astro-ingest serve` and screenshot it with headless Chromium:
+`.venv/bin/python dev/screenshot.py http://localhost:8000/ /tmp/shot.png [--click "Review"] [--full]`, then view the
+PNG with the Read tool (the script also prints browser console errors).
 
 ## Hard rules
 - In dev, **write only under `ASTRO_ROOT=/astro-sandbox`**. `/astro` is mounted read-only; don't try to work around that.

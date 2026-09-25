@@ -4,6 +4,14 @@ FROM python:3.12-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git openssh-client curl ca-certificates ripgrep less nano procps tini tzdata vim tmux\
     && rm -rf /var/lib/apt/lists/*
+# Headless Chromium for Claude to view the web UI (dev/screenshot.py). Browsers and their system libraries live
+# in the image at a fixed path; the Playwright version here must match the one pinned in pyproject's dev extras.
+ARG PLAYWRIGHT_VERSION=1.63.0
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" \
+    && playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/ms-playwright \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd -u 99 -g 100 -m -d /home/dev -s /bin/bash dev
 # Login shells (bash -l, UnRAID's console button) reset PATH in /etc/profile; profile.d runs after that,
 # so ~/.local/bin (where Claude Code is installed) stays on PATH in every kind of shell.

@@ -10,6 +10,7 @@ docker build -t ${NAME} "$BASE/src/dev"
 docker rm -f ${NAME} >/dev/null 2>&1 || true
 docker run -d --name ${NAME} --restart unless-stopped \
   --env-file "$ENV_FILE" \
+  --shm-size=1g \
   -v "$BASE/src":/workspace \
   -v "$BASE/home":/home/dev \
   -v /mnt/user/Astronomy:/astro:ro \
