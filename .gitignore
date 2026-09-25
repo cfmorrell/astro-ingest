@@ -1,0 +1,37 @@
+# Image data: never commit real subs, thumbnails or exports (test fixtures are generated at test time)
+*.fit
+*.fits
+*.fts
+*.xisf
+*.cr2
+*.CR2
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+*.tif
+*.tiff
+
+# Secrets / local config
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+build/
+dist/
+
+# Local app state (the real STATE_DIR lives on the share)
+state/
+*.sqlite3
+*.sqlite3-journal
+*.part
+
+# OS junk
+.DS_Store
+._*
+desktop.ini
+Thumbs.db
