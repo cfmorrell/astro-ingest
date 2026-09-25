@@ -257,7 +257,9 @@ class _Planner:
                         f"({self.index.find(frame.rel.rsplit('/', 1)[-1])[0].size:,} bytes there, {frame.entry.size:,} "
                         f"here){' — the NAS copy looks truncated' if truncated else ''}. Replace it?",
                         [("replace", "Retire the NAS copy to _to_delete/ and copy this one"),
-                         ("skip", "Leave on the ASIAIR")], None, [frame.rel], it.group)
+                         ("skip", "Leave on the ASIAIR")],
+                        # A damaged NAS copy with a good one here: use the better copy (Chris, 2026-09-25)
+                        "replace" if truncated else None, [frame.rel], it.group)
         if d.resolved == "replace":
             it.action, it.dsts, it.retire = COPY, [diff[0]], list(diff)
             it.reason = "replaces a bad copy on the NAS (Chris)"

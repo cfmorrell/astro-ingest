@@ -42,6 +42,9 @@ so tell Chris.
 14. **10-frame cap on ingest:** copy the first 10 frames of each calibration batch; offer the extras for source
     deletion, called out. **Light groups of 3 frames or fewer** are asked about (file them, or treat as test frames).
 15. **Temperature suffix** = the batch's mean CCD-TEMP, rounded; none when it rounds to -10 °C.
+16. **Damaged NAS copies:** when the NAS copy of a frame is damaged (e.g. truncated) and the ASIAIR has a good one,
+    use the better copy: default answer is *replace* (retire the bad NAS copy to `_to_delete/`, then copy).
+    Answers to plan decisions live in `STATE_DIR/answers.json` until Phase 4 moves them to SQLite.
 
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",

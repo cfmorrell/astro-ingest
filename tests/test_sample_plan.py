@@ -44,6 +44,7 @@ def test_already_ingested_and_appends(plan):
 def test_truncated_nas_copy(plan):
     d = [d for d in plan.decisions if d.kind == "name-clash"]
     assert len(d) == 1 and "truncated" in d[0].question and "20250704-003013" in d[0].items[0]
+    assert d[0].resolved == "replace"
 
 
 def test_new_sessions(plan):
@@ -56,7 +57,7 @@ def test_new_sessions(plan):
 
 def test_open_decisions(plan):
     kinds = Counter(d.kind for d in plan.decisions if d.resolved is None)
-    assert kinds == {"target": 2, "tiny-group": 1, "name-clash": 1}
+    assert kinds == {"target": 2, "tiny-group": 1}
     targets = {d.question.split("'")[1] for d in plan.decisions if d.kind == "target"}
     assert targets == {"NGC 4565", "NGC 5982"}
 

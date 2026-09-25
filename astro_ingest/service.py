@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,15 @@ def targets(cfg: Config) -> list[Target]:
     raise FileNotFoundError(f"no {TARGETS_CSV} under ASTRO_ROOT or ASTRO_NAS")
 
 
+ANSWERS_FILE = "answers.json"
+
+
+def load_answers(cfg: Config) -> dict[str, str]:
+    """Chris's answers to plan decisions, {decision_id: answer}, kept in STATE_DIR (moves to SQLite in phase 4)."""
+    path = Path(cfg.state_dir) / ANSWERS_FILE
+    return json.loads(path.read_text()) if path.is_file() else {}
+
+
 @dataclass
 class Planned:
     scan: Scan
@@ -57,4 +67,5 @@ class Planned:
 
 def scan_and_plan(cfg: Config, source: Source, answers: dict[str, str] | None = None, progress=None) -> Planned:
     result = scan(source, cfg.tz, progress=progress)
+    answers = load_answers(cfg) if answers is None else answers
     return Planned(result, build_plan(result, nas_index(cfg), targets(cfg), answers), dt.datetime.now(cfg.tz))

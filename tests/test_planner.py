@@ -279,7 +279,10 @@ def test_truncated_copy_on_nas(w):
     plan = w.plan()
     d = decision(plan, "name-clash")
     item = by_name(plan, good.name)[0]
-    assert item.action == P.PENDING and "truncated" in d.question and item.warnings
+    # a damaged NAS copy with a good one here: replace is the default (Chris)
+    assert d.default == "replace" and "truncated" in d.question and item.warnings
+    assert item.action == P.COPY and item.retire == [f"{sadr}/lights/{good.name}"]
+    assert by_name(w.plan({d.id: "skip"}), good.name)[0].action == P.SKIP
     fixed = by_name(w.plan({d.id: "replace"}), good.name)[0]
     assert fixed.action == P.COPY and fixed.retire == fixed.dsts == [f"{sadr}/lights/{good.name}"]
 
