@@ -3,10 +3,13 @@
 set -euo pipefail
 BASE=/mnt/user/docker_appdata/astro-ingest-dev
 NAME=astro-ingest-dev
+# App config (ASTRO_ROOT, STATE_DIR, ASIAIR_*, TZ, ...) comes from the repo's .env; seed it from .env.example.
+ENV_FILE="$BASE/src/.env"
+[ -f "$ENV_FILE" ] || cp "$BASE/src/.env.example" "$ENV_FILE"
 docker build -t ${NAME} "$BASE/src/dev"
 docker rm -f ${NAME} >/dev/null 2>&1 || true
 docker run -d --name ${NAME} --restart unless-stopped \
-  -e TZ=America/New_York \
+  --env-file "$ENV_FILE" \
   -v "$BASE/src":/workspace \
   -v "$BASE/home":/home/dev \
   -v /mnt/user/Astronomy:/astro:ro \

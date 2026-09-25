@@ -5,7 +5,7 @@ Names used throughout: repo `cfmorrell/astro-ingest`, container `astro-ingest-de
 
 ## 1. Project folders
 ```bash
-BASE=/mnt/user/docker_appdata/astro-ingest
+BASE=/mnt/user/docker_appdata/astro-ingest-dev
 mkdir -p $BASE/src $BASE/home
 cp -r /mnt/user/Astronomy/Z95-ClaudeReferences/astro-ingest-scaffold/. $BASE/src/
 chown -R 99:100 $BASE
@@ -35,7 +35,7 @@ chown -R 99:100 $SB
 
 ## 4. Build and start the dev container
 ```bash
-bash /mnt/user/docker_appdata/astro-ingest/src/dev/run-dev.sh
+bash /mnt/user/docker_appdata/astro-ingest-dev/src/dev/run-dev.sh
 docker exec -it astro-ingest-dev bash
 ```
 The container runs as uid 99 / gid 100 (UnRAID `nobody:users`), so anything it creates matches the array's ownership.
@@ -76,6 +76,13 @@ git commit -m "Scaffold: CLAUDE.md, handoff docs, dev container, reference scrip
 git remote add origin git@github.com:cfmorrell/astro-ingest.git
 git push -u origin main
 ```
+
+Python dependencies go in a virtualenv inside the repo (git-ignored, persisted with `/workspace`):
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest
+```
+`dev/run-dev.sh` passes the repo's `.env` to the container, so after editing `.env`, rerun it on the UnRAID console.
 
 ## 8. Hand off to Claude Code
 In `/workspace`, run `claude`, switch to **plan mode** (Shift+Tab), and start with:

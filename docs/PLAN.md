@@ -1,0 +1,204 @@
+# astro-ingest: architecture and phased plan
+
+## Context
+**Goal:** make it simple for Chris to pull data off the ASIAIR, file it, and keep the ASIAIR clean.
+
+The archive was reorganized by hand over two days (see the `docs/ORGANIZATION_GUIDE.md` decision log). The rules and
+reference scripts from that work now become an app with this flow:
+1. Find the ASIAIR on the home network and connect to its `EMMC Images` SMB share.
+2. Index the share.
+3. Show a review screen of exactly what gets copied where.
+4. Copy into the archive under its rules, with checksum verification.
+5. Write PROJECT_INFO and index links.
+6. After verification and Chris's approval, delete the copied files from the ASIAIR.
+
+There's no stacking. State lives on the share (`STATE_DIR`).
+
+### What the survey found (drives the design)
+- **ASIAIR layout** (`EMMC Images` share, same shape as `/astro-sandbox/_asiair-sample`, 56 GB):
+  `Autorun/{Light/<Object>,Flat,Dark,Bias}`, `Plan/Light/<Object>`, plus `Live`, `Preview`, `Video`, `log`,
+  `GuidingDarkLibrary`, `System Volume Information`, `batch_stack_tmp`. Every `.fit` has a `_thn.jpg` sibling, and
+  `.DS_Store`/`._*` files are present. It sits at 192.168.1.43 today (guest SMB).
+- **Filenames** follow `<Type>_<Object with spaces>_<exp>(s|ms)_Bin1_<cam>_[<filter>_]gain<g>_<YYYYMMDD-HHMMSS>_[<N>deg_]<temp>C_<seq>.fit`
+  in local time. Headers have `DATE-OBS` (UTC), `FOCALLEN`, `OFFSET`, `SITELAT/LONG`, and `TELESCOP` = the mount.
+- **Flats all sit in one `Autorun/Flat` folder** with no target, usually shot at dawn after the night. They're matched
+  to lights by night + camera + rotation angle (mod 180°, because a meridian flip reports +180°: Soul's 3°/185° lights
+  match its 185° flats). **`79deg` looks like a default or no-solve value**, so the angle is a hint that raises a
+  warning, not a hard key.
+- **About 60% of the sample is already archived** (matched by filename): Autorun lights, 5 flat sets, the 2026-08-29
+  bias and 300 s darks, NGC 7000 2025-07-03, and most of Elephant Trunk 09-13/14 and Heart 09-15.
+- **Frames missing from archived sessions:** 9 dawn Elephant Trunk, 9 dawn Heart, and 4 M42 frames. Chris deleted
+  these as poor quality after the manual copy.
+- **New data:**
+  - Soul 2026-09-23 and NGC 5907 06-15 (existing targets).
+  - NGC 4565 04-27 and NGC 5982 06-19 (**new targets**).
+  - 120 s darks from 2026-04-28 (a new library set).
+  - One M13 frame from 2025-06-11.
+  - **Orphan flats from 2026-05-16 (4.0 s) and 2026-06-24 (6.2 s).** No lights for those nights are on the ASIAIR
+    or in the archive (`103-ByDate` has nothing between 04-11 and 08-28). The lights may have been lost.
+
+## Decisions from Chris
+1. **Already-archived frames:** checksum-compare each one against its archive copy. Identical frames are offered for
+   source cleanup and never re-copied.
+2. **Frames missing from an existing session:** ask per batch. The default is **append**, because Chris wants all data
+   for now. Keep a per-frame record so a later quality-analysis feature can reject frames.
+3. **`Live`, `Preview`, `Video`, `log`, `GuidingDarkLibrary`:** ignored by default. They're listed as "not handled"
+   and never deleted. Leave an opt-in hook for occasional EAA copies, but don't build it yet.
+4. **Source delete removes each `.fit` and its `_thn.jpg` together**, for both copied and already-archived frames.
+   The cleanup screen lists both files per frame, and its totals include the thumbnails. Thumbnails left without a
+   `.fit` are also offered for deletion. Then prune empty directories, but never the ASIAIR's structural folders
+   (`Autorun/Light`, `Plan/Light`, …). Thumbnails are never copied to the archive.
+5. **Calibration completeness gate before any delete.** Before a flat or dark-flat set is offered for deletion, the
+   app searches for the lights it belongs to. A set that has lights is useful and gets filed with them, as normal.
+   - Where it searches: the ASIAIR (any object that night), archive sessions for the same or adjacent night with a
+     matching camera (and angle mod 180), and archived sessions that have **no flats** but whose camera, angle and
+     date fit.
+   - **If no lights are found:** the set is flagged "lights not found, possibly lost" and **blocked from cleanup**
+     until Chris either files it with a session he points to or explicitly releases it for deletion. The cleanup
+     screen has a one-click "release" per set.
+   - Chris confirmed the 05-16 and 06-24 lights don't exist, so those two sets are the first ones to release. The
+     acceptance test checks that they're blocked until then.
+   - The reverse check runs too: lights with no matching flats get a warning on the review screen.
+6. **Only the `EMMC Images` share** is supported.
+7. **ASIAIR discovery:** the app finds the ASIAIR on `192.168.1.0/24` and connects to `EMMC Images` over SMB itself.
+8. **UI consistency with astro-stacker** (github.com/cfmorrell/astro-stacker, surveyed at `f31cbcb`), since the two
+   apps may be merged later. That overrides CLAUDE.md's Jinja2 + HTMX suggestion. Mirror the stacker's patterns:
+   - **Frontend:** plain `static/index.html` + `app.js` + `styles.css`. No build step and no framework, served by
+     FastAPI `StaticFiles` mounted last, talking to a JSON API.
+   - **Styling:** copy `styles.css` wholesale as the base. That's the `:root` tokens (`--bg #0a0c12`, `--panel`,
+     `--accent #6366f1`, `--warn`, `--danger`, `--success`, `--radius`) and the components: `topbar` with `.brand` and
+     `.version-badge`, the health `.badge`, `.card`/`.card-header`/`.card-title`, `.stepper` with `.step`/`.dot`/
+     `.connector`, `.field`/`.field-row`, `.hint`, `.help-box`, button `primary`/`ghost`/`small`/`danger-outline`,
+     `.chip`/`.checklist`, `.progress-*`, `.log-view`, `.active-jobs-panel`, `.external-job-banner`,
+     `.session-mismatch-warning`, and the lightbox. Ingest-only styles go in a clearly marked section at the bottom.
+     Record the source commit in a header comment so drift can be diffed later.
+   - **JS helpers:** reuse `api()`, `el()`, `pollJob()`, and `setStepBadge()` in the same shapes.
+   - **Jobs API:** match the stacker's shape: `/jobs`, `/jobs/{id}` (`status`, `percent_complete`, `current_line`,
+     `steps`), and `/jobs/{id}/log`.
+   - **Versioning:** `config.VERSION` surfaced through `GET /health` and the header badge, staying under 1.0.
+   - **Build:** a single repo and a GitHub Actions `docker-publish` workflow.
+   - **Scope boundary:** the stacker's Handoff says archival and sorting belong to *this* app. astro-ingest owns
+     "get it off the ASIAIR and into the archive"; the stacker reads from the archive (its read-only `CAPTURES_DIR`).
+
+## Architecture
+```
+astro_ingest/
+  config.py        env: ASTRO_ROOT (write target), ASTRO_ARCHIVE (read-only lookups), STATE_DIR, TZ,
+                   ASIAIR_SUBNET=192.168.1.0/24, ASIAIR_SHARE="EMMC Images", optional ASIAIR_HOST (pin an IP),
+                   optional ASIAIR_ROOT (use a local dir/mount instead of SMB: the sandbox sample in dev).
+                   Validates at startup; exposes the write guard.
+  sources/         Source interface: walk / stat / open_read / delete. Nothing else touches the source.
+    local.py       LocalDirSource (ASIAIR_ROOT: _asiair-sample, a scratch copy, or a kernel mount)
+    smb.py         SmbSource via `smbprotocol`/`smbclient` (pure Python, guest auth; no CAP_SYS_ADMIN or kernel
+                   mount needed in the container). Streaming reads, reconnect on drop.
+    discover.py    concurrent TCP:445 probe of ASIAIR_SUBNET (short timeouts), then guest share enumeration.
+                   A host exporting "EMMC Images" is an ASIAIR. Tries the last-known IP (STATE_DIR) first, then
+                   scans. The dashboard shows found/online/offline and has a "Find ASIAIR" button.
+  core/            PURE library, no web imports, fully unit-tested
+    fits.py        port of fitshdr.py (FITS + XISF header reader; reads just the header blocks over SMB)
+    asiair.py      filename parser (object with spaces, s/ms, optional filter/deg), header fallback,
+                   ignore rules, .fit ↔ _thn.jpg pairing
+    rules.py       night date (see "Local time" below), camera tokens/library folder names,
+                   FOCALLEN→scope table, temp suffix from CCD-TEMP, site table + 4 km lookup, naming
+    targets.py     targets.csv; normalize "M 8"/"NGC 7000"/"SoulNebula"; catalog-ID then name match;
+                   unmatched → decision queue; new-target proposals (folder, name, M/NGC/IC/other)
+    archive.py     walk rules (no symlinks; skip 0*/1*/Z*/dotfiles/_to_delete); filename→path index;
+                   session index (night, camera, scope, angle, has-flats); calibration library index
+    planner.py     classify (IMAGETYP, then prefix; short "Dark" matching flat exposure → darkflat), group per
+                   target/night/camera/scope, flat↔lights matching + completeness gate (decision 5), darkflat policy
+                   (294MC/183MM only), library routing with duplicate check + 10-frame cap, §7.5 collisions,
+                   multi-night split + flat copies + notes, already-archived / missing-from-session detection.
+                   PlanItem = (src, dst, action, reason, warnings). Actions: copy | already-archived | append |
+                   needs-decision | calib-without-lights | over-cap | ignored
+    fsops.py       the ONLY archive writer: path guard (under ASTRO_ROOT/STATE_DIR only), streaming copy +
+                   BLAKE2b → *.part → fsync → no-clobber rename → re-read + re-hash; never .DS_Store/._*;
+                   retire to _to_delete
+    cleanup.py     source deletes, only via Source.delete, only verified + approved + gate-passed items
+    projinfo.py    port of projinfo.py as a function returning text (nightof via zoneinfo, not a fixed 16 h)
+    links.py       port of make_index_links.py parameterized by root (100–103, ZZ_TARGET_INDEX.md)
+    calneeds.py    port; report only (ZZ_IMAGING_TODO.md edits stay manual for now)
+    oplog.py       append-only TSV logs in STATE_DIR/logs/, in the Z95 plans/*.log style
+  state/db.py      SQLite STATE_DIR/ingest.sqlite3, journal_mode=DELETE (no WAL on shfs/FUSE). Tables: asiair
+                   (last IP, seen), scans, source_files(path,size,mtime,hash,thumb), batches, plan_items,
+                   operations, decisions. Lock file STATE_DIR/ingest.lock so the app and Claude never write
+                   at the same time. Each batch is exported to STATE_DIR/batches/<id>.tsv for Claude to read.
+  jobs.py          one in-process worker; resumable from the operations table; pauses cleanly if the ASIAIR drops
+  cli.py           astro-ingest find | scan | plan | apply | verify | cleanup | projinfo | links | reindex
+  api.py           FastAPI JSON API (/health, /asiair, /scan, /batches/*, /decisions, /jobs*, thumbnail proxy);
+                   StaticFiles mounted last, as in the stacker
+static/            index.html + app.js + styles.css (stacker base + ingest section). Topbar: "astro-ingest",
+                   version badge, "pull · file · clean", and an ASIAIR health badge (online @ IP / offline).
+                   Stepper: Connect → Scan → Review → Copy & verify → File → Clean up, one .card per step.
+                   Review is grouped per destination session: counts, sizes, and dst paths, with decisions as
+                   chips/checklists, warnings as .session-mismatch-warning, and the ASIAIR _thn.jpg previews
+                   in the stacker's lightbox. Also an active-jobs panel and a log view per job.
+tests/             pytest; tiny generated FITS fixtures (hand-written header + 2×2 data) in an ASIAIR-shaped tree,
+                   a fixture archive, and a fake Source for discovery/SMB-free tests
+```
+### Local time (EDT vs EST)
+- **Primary source is the filename timestamp.** The ASIAIR writes local wall-clock time (`20260923-211420`), and the
+  night date is that timestamp minus 12 h. No UTC offset is involved, so daylight saving can't affect it.
+- **Fallback, and a cross-check on every frame:** convert `DATE-OBS` (UTC) with
+  `zoneinfo.ZoneInfo(TZ)`, where `TZ=America/New_York`. The tz database picks EDT (−4) or EST (−5) for each date,
+  including the changeover nights.
+- **If the two disagree by more than a minute or two,** the review screen warns: the ASIAIR clock or time zone is
+  wrong (it takes its time from the phone or tablet), and the frame waits for Chris instead of guessing.
+- Tests cover a summer night, a winter night, and both DST-change nights.
+- The fixed "UTC − 16 h" in the old `projinfo.nightof()` is replaced by this. In winter it lands an hour off, which
+  only mis-dates frames taken between 11:00 and 12:00 local, but it's still wrong.
+
+The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
+
+## Phases (each one a small series of reviewable commits)
+0. **Repo hygiene and skeleton.**
+   - `.gitignore`: `*.fit`, `*.fits`, `*.fts`, `*.xisf`, `*.jpg`, `*.jpeg`, `.env`, `__pycache__/`, `.DS_Store`,
+     `._*`, and local state.
+   - Remove the committed `.DS_Store` ×2 and the `.pyc`. Add `.env.example`, `pyproject.toml`, the skeleton, pytest,
+     the fixture generator, and `config.py`.
+   - Dev naming is `astro-ingest-dev` (Chris's change). Update the host paths in CLAUDE.md and SETUP.md to
+     `/mnt/user/docker_appdata/astro-ingest-dev/…`, and make `run-dev.sh` pass `--env-file` so the container gets
+     `ASTRO_ROOT` and the other variables.
+   - Sync `docs/ORGANIZATION_GUIDE.md` with the live copy.
+   - Update CLAUDE.md's "Suggested stack" to record today's decisions: the stacker-style static frontend, direct SMB
+     plus discovery, the decisions above, and the goal statement.
+1. **Core rules library and LocalDirSource (read-only).** Port `fits`, `asiair`, `rules`, `targets` and `archive`,
+   with tests for every rule: night date across EDT/EST, FOCALLEN ranges, camera names, temp suffix, site lookup,
+   object normalization, thumbnail pairing. `cli scan` inventories `_asiair-sample`.
+2. **Planner and review screen (read-only).** This is the first UI commit: the stacker `styles.css` base, the
+   `index.html` shell (topbar, stepper, cards), the `/health` endpoint with `VERSION`, then the Review step.
+   Acceptance test: the plan for `_asiair-sample` against `/astro` must
+   reproduce the survey:
+   - archived sets
+   - 22 missing-from-session frames, defaulting to append
+   - Soul and NGC 5907 sessions
+   - two new-target proposals
+   - the `120 Seconds/2026-04-28` darks
+   - 05-16 and 06-24 flats as `calib-without-lights`
+3. **ASIAIR discovery and SmbSource (read-only against the real device).** Build `discover.py` and `smb.py`, plus the
+   dashboard status and Find button. Test with a fake network in unit tests. Against the live ASIAIR, only list and
+   read. Check SMB throughput and reconnect behavior.
+4. **Copy and verify into the sandbox.** `fsops`, `jobs`, the op log, approval, and progress. Checksum
+   already-archived items against `ASTRO_ARCHIVE`. Test resume-after-kill and source drop mid-copy. Confirm the
+   no-clobber rename on shfs.
+5. **Filing extras.** PROJECT_INFO for touched sessions, library reindex, multi-night split with `.flats_are_copies`
+   and notes, new targets (targets.csv row, then links) after approval, index links incl. `103-ByDate`, calneeds
+   report, and decision-log drafts.
+6. **Source cleanup.** Only verified, approved, gate-passed items. Before deleting, re-check source size and mtime
+   against the scan. Delete each `.fit` **and** its `_thn.jpg` plus orphan thumbnails, prune empty non-structural
+   dirs, and log every delete. Test against a scratch copy (`/astro-sandbox/_asiair-scratch`) with LocalDirSource.
+   Test SMB deletes against a throwaway Samba share before the real ASIAIR is ever touched.
+7. **Production.** App Dockerfile, a `docker-publish` workflow (same as the stacker), and a run script (`ASTRO_ROOT=/astro` rw, LAN access for discovery), put the app
+   behind Nginx Proxy Manager with authentication (it deletes source data), and confirm the archive backup first.
+
+## Verification
+- Run `pytest` at every phase. The pure library carries most of the coverage.
+- **Phase 2:** diff `astro-ingest plan --source /astro-sandbox/_asiair-sample` against a checked-in expected plan.
+- **Phase 3:** `astro-ingest find` locates the ASIAIR at 192.168.1.43 and lists `EMMC Images`, and a scan over SMB
+  matches the scan of the sample.
+- **Phases 4–6:** run end to end on the sandbox: scan → approve → copy → verify (re-hash independently with `b2sum`).
+  Check counts before and after. Nothing may be written outside `/astro-sandbox`. After cleanup, no approved `.fit`
+  or `_thn.jpg` remains, gate-blocked flats are untouched, and nothing else changed. Walk the UI on port 8090.
+
+## Tell Chris
+- The ASIAIR is currently mounted **read-only** in dev (`/asiair`), which is fine: the app talks SMB directly, and
+  deletes stay off the real device until phase 6 is proven.
