@@ -10,3 +10,11 @@ and, after verified copies and approval, cleans up the source.
 - Reference implementations from the share's reorganization: [`reference/scripts/`](reference/scripts/).
 
 Out of scope: stacking and processing (a separate Siril stacking app).
+
+## Run it (dev container)
+```bash
+.venv/bin/astro-ingest scan            # inventory of the ASIAIR source (read-only)
+.venv/bin/astro-ingest plan            # what would be copied where, decisions, clean-up preview (read-only)
+.venv/bin/astro-ingest serve           # web app on container port 8000 → http://<unraid>:8090
+.venv/bin/pytest                       # tests (the sample acceptance test runs when /astro and the sample are mounted)
+```

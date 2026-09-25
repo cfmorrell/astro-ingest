@@ -25,5 +25,8 @@ version = { attr = "astro_ingest.config.VERSION" }
 [tool.setuptools.packages.find]
 include = ["astro_ingest*"]
 
+[tool.setuptools.package-data]
+astro_ingest = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

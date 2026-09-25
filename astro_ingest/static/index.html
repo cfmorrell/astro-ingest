@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>astro-ingest</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div><a href="#" id="brand-link" class="brand">astro-ingest</a><span id="app-version" class="version-badge"></span><span class="brand-sub">pull · file · clean</span></div>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <span id="source-badge" class="badge" title="">source…</span>
+    <span id="health-badge" class="badge">checking…</span>
+  </div>
+</header>
+
+<main>
+  <div class="stepper" id="stepper"></div>
+
+  <!-- ============ CONNECT ============ -->
+  <section class="step-panel" data-step="connect">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Capture source</div>
+        <div id="connect-status-badge" class="badge">checking</div>
+      </div>
+      <div id="connect-body"></div>
+      <p class="hint">Finding the ASIAIR on the home network and connecting to its <code>EMMC Images</code> share directly arrives in phase 3. Until then the source is the local folder in <code>ASIAIR_ROOT</code>.</p>
+    </div>
+  </section>
+
+  <!-- ============ SCAN ============ -->
+  <section class="step-panel" data-step="scan">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">What's on the ASIAIR</div>
+        <div id="scan-status-badge" class="badge">not scanned</div>
+      </div>
+      <div id="scan-body"></div>
+      <div class="progress-wrap">
+        <button id="rescan-btn" class="primary">↻ Scan again</button>
+        <button id="scan-next-btn" class="ghost">Next: Review →</button>
+      </div>
+      <p class="hint">Scanning only reads: it lists every file and reads frame headers in Autorun/ and Plan/. Nothing is written or deleted.</p>
+    </div>
+  </section>
+
+  <!-- ============ REVIEW ============ -->
+  <section class="step-panel" data-step="review">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">What will be copied where</div>
+        <div id="review-status-badge" class="badge">loading</div>
+      </div>
+      <div id="review-summary"></div>
+      <p class="hint">Read-only preview. Answering decisions and approving the copy arrive in phase 4; nothing is written until then.</p>
+    </div>
+
+    <div class="card" id="decisions-card" style="display:none;">
+      <div class="card-header">
+        <div class="card-title">Decisions</div>
+        <div id="decisions-badge" class="badge"></div>
+      </div>
+      <div id="decisions-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Sessions</div>
+        <div id="sessions-badge" class="badge"></div>
+      </div>
+      <div id="sessions-list"></div>
+    </div>
+
+    <div class="card" id="library-card" style="display:none;">
+      <div class="card-header">
+        <div class="card-title">Calibration library</div>
+      </div>
+      <div id="library-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Clean-up preview</div>
+        <div class="badge">nothing deleted yet</div>
+      </div>
+      <div id="cleanup-preview"></div>
+    </div>
+  </section>
+
+  <!-- ============ LATER PHASES ============ -->
+  <section class="step-panel" data-step="copy">
+    <div class="card"><div class="card-title">Copy &amp; verify</div><p class="empty-hint">Arrives in phase 4: copy on approval, verify every file by size and checksum.</p></div>
+  </section>
+  <section class="step-panel" data-step="file">
+    <div class="card"><div class="card-title">File</div><p class="empty-hint">Arrives in phase 5: PROJECT_INFO, library reindex, new targets, index links.</p></div>
+  </section>
+  <section class="step-panel" data-step="clean">
+    <div class="card"><div class="card-title">Clean up</div><p class="empty-hint">Arrives in phase 6: delete verified frames and their thumbnails from the ASIAIR, after your approval.</p></div>
+  </section>
+</main>
+
+<div class="lightbox-overlay" id="lightbox">
+  <div class="lightbox-hint">click image to zoom · click outside to close</div>
+  <div class="lightbox-scroll" id="lightbox-scroll">
+    <img id="lightbox-img" src="" alt="" />
+  </div>
+  <div class="lightbox-footer">
+    <div class="lightbox-caption" id="lightbox-caption"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
