@@ -3,16 +3,16 @@ import os
 
 from fitsgen import ASIAIR_LIGHT, asiair_frame, write_fits
 
-from astro_ingest.core.archive import build_index, calibration_library
+from astro_ingest.core.nas import build_index, calibration_library, merge
 
 
-def make_archive(root):
+def make_nas(root):
     s = "ElephantTrunkNebula-IC1396/2026-09-13-ElephantTrunkNebula-2600MC-Z61"
     asiair_frame(root, f"{s}/lights", "Light", "20260913-213151", obj="ElephantTrunk", angle=4, thumb=False)
     asiair_frame(root, f"{s}/lights", "Light", "20260914-031000", obj="ElephantTrunk", angle=184, seq=2, thumb=False)
     asiair_frame(root, f"{s}/flats", "Flat", "20260914-064000", exposure_s=15, angle=4, thumb=False)
     (root / s / "PROJECT_INFO.txt").write_text("x")
-    # retired files are not "archived"
+    # retired files do not count as ingested
     asiair_frame(root, f"{s}/_to_delete", "Light", "20260913-220000", obj="ElephantTrunk", seq=9, thumb=False)
     # a session without flats
     asiair_frame(root, "SoulNebula-IC1848/2020-10-03-SoulNebula-294MC-Z61/lights", "Light", "20201003-230000",
@@ -35,7 +35,7 @@ def make_archive(root):
 
 
 def test_index_files_and_sessions(tmp_path):
-    s = make_archive(tmp_path)
+    s = make_nas(tmp_path)
     index = build_index(tmp_path)
 
     assert index.target_folders == ["ElephantTrunkNebula-IC1396", "SoulNebula-IC1848"]
@@ -57,7 +57,7 @@ def test_index_files_and_sessions(tmp_path):
 
 
 def test_calibration_library(tmp_path):
-    make_archive(tmp_path)
+    make_nas(tmp_path)
     sets = {s.rel: s for s in calibration_library(tmp_path)}
     bias = sets["001-MasterBias/ASI2600MC Pro/2026-08-29"]
     assert (bias.kind, bias.count, bias.camera.token, bias.gain, bias.offset) == ("Bias", 3, "2600MC", "100", "50")
@@ -65,3 +65,18 @@ def test_calibration_library(tmp_path):
     dark = sets["002-MasterDarks/ASI294MC Pro/300 Seconds/2023-04-19 (+14C)"]
     assert (dark.kind, dark.camera.library, dark.exposure_s, dark.gain) == ("Dark", "ASI294MC Pro", 300.0, "120")
     assert dark.temp_c == 15.0  # mean of first (14) and last (16) frame
+
+
+def test_merge_sees_frames_ingested_into_the_sandbox(tmp_path):
+    make_nas(tmp_path / "nas")
+    sandbox = tmp_path / "sandbox"
+    s = "SoulNebula-IC1848/2026-09-23-SoulNebula-2600MC-Z61"
+    asiair_frame(sandbox, f"{s}/lights", "Light", "20260923-211420", obj="SoulNebula", angle=3, thumb=False)
+    asiair_frame(sandbox, "ElephantTrunkNebula-IC1396/2026-09-13-ElephantTrunkNebula-2600MC-Z61/lights", "Light",
+                 "20260913-213151", obj="ElephantTrunk", angle=4, thumb=False)   # same file in both
+    merged = merge(build_index(tmp_path / "nas"), build_index(sandbox))
+    assert merged.session("SoulNebula-IC1848", "2026-09-23-SoulNebula-2600MC-Z61").light_count == 1
+    assert merged.target_folders == ["ElephantTrunkNebula-IC1396", "SoulNebula-IC1848"]
+    et = merged.find("Light_ElephantTrunk_300.0s_Bin1_2600MC_gain100_20260913-213151_4deg_-10.0C_0001.fit")
+    assert len(et) == 1
+    assert merged.session("ElephantTrunkNebula-IC1396", "2026-09-13-ElephantTrunkNebula-2600MC-Z61").has_flats

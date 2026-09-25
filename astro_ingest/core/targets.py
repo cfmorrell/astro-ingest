@@ -2,7 +2,7 @@
 
 Match on catalog ID first, then on name; never guess. A catalog ID can legitimately belong to several targets
 (IC 1805 is both HeartNebula-IC1805 and HeartAndSoulNebulae-IC1805-IC1848), so matching returns every candidate
-and the caller decides (usually from archive evidence or by asking Chris).
+and the caller decides (usually from ingest evidence or by asking Chris).
 """
 
 from __future__ import annotations

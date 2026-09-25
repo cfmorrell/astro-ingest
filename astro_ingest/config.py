@@ -1,7 +1,7 @@
 """Environment-derived settings and the write guard.
 
 Every path comes from the environment (see .env.example); nothing is hard-coded. The write guard is the one
-place that decides whether the app may write to a path: only under ASTRO_ROOT (the archive being filed into)
+place that decides whether the app may write to a path: only under ASTRO_ROOT (the share being ingested into)
 or STATE_DIR (the app's own state). Source deletes on the ASIAIR go through the Source interface, not here.
 """
 
@@ -28,7 +28,7 @@ class WriteGuardError(Exception):
 @dataclass(frozen=True)
 class Config:
     astro_root: Path
-    astro_archive: Path
+    astro_nas: Path
     state_dir: Path
     tz: ZoneInfo
     asiair_root: Path | None
@@ -59,7 +59,9 @@ class Config:
         asiair_root = optional("ASIAIR_ROOT")
         return cls(
             astro_root=required("ASTRO_ROOT"),
-            astro_archive=required("ASTRO_ARCHIVE"),
+            # ASTRO_ARCHIVE is the old name for ASTRO_NAS; still accepted so existing .env files keep working
+            astro_nas=required("ASTRO_NAS" if env.get("ASTRO_NAS", "").strip() or "ASTRO_ARCHIVE" not in env
+                               else "ASTRO_ARCHIVE"),
             state_dir=required("STATE_DIR"),
             tz=tz,
             asiair_root=Path(asiair_root) if asiair_root else None,

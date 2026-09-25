@@ -1,4 +1,4 @@
-"""The archive's filing rules (docs/ORGANIZATION_GUIDE.md, docs/ClaudeHandoff.md §3–§6) as pure functions."""
+"""The Astronomy share's filing rules (docs/ORGANIZATION_GUIDE.md, docs/ClaudeHandoff.md §3–§6) as pure functions."""
 
 from __future__ import annotations
 
@@ -115,15 +115,18 @@ def scope_from_focal_length(focal_length_mm: float | None) -> Scope | None:
 
 # ---------------------------------------------------------------- calibration libraries
 
-STANDARD_TEMP_C = -10.0
-TEMP_TOLERANCE_C = 1.5  # cooler regulation noise (-9.6 … -11.9 C in the sample) still counts as standard
+STANDARD_TEMP_C = -10
 
 
 def temp_suffix(mean_ccd_temp_c: float | None) -> str:
-    """'' at the standard -10 C, else ' (+14C)' / ' (-20C)'. Always from CCD-TEMP, never from a folder label."""
-    if mean_ccd_temp_c is None or abs(mean_ccd_temp_c - STANDARD_TEMP_C) <= TEMP_TOLERANCE_C:
+    """'' when the rounded mean CCD-TEMP is the standard -10 C, else ' (+14C)' / ' (-20C)'.
+
+    Always from the frames' CCD-TEMP, never from a folder label.
+    """
+    if mean_ccd_temp_c is None:
         return ""
-    return f" ({round(mean_ccd_temp_c):+d}C)"
+    rounded = round(mean_ccd_temp_c)
+    return "" if rounded == STANDARD_TEMP_C else f" ({rounded:+d}C)"
 
 
 def exposure_folder(exposure_s: float) -> str:
@@ -228,7 +231,7 @@ SCOPE_TOKENS = ("Z61", "WO61", "RC6", "SV503", "FMA135")
 
 
 def parse_session_name(name: str) -> SessionName | None:
-    """Split an archive session folder name into its parts; None if it doesn't start with a date."""
+    """Split a session folder name into its parts; None if it doesn't start with a date."""
     m = _SESSION.match(name)
     if not m:
         return None

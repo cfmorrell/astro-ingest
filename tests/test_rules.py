@@ -88,7 +88,8 @@ def test_unknown_focal_length(fl):
 # ---------------------------------------------------------------- calibration library
 
 @pytest.mark.parametrize("temp, suffix", [
-    (-10.0, ""), (-9.6, ""), (-11.5, ""), (None, ""),
+    (-10.0, ""), (-9.6, ""), (-10.4, ""), (-9.5, ""), (None, ""),     # rounds to -10: standard
+    (-11.2, " (-11C)"), (-8.4, " (-8C)"),                               # rounds elsewhere: suffix
     (14.2, " (+14C)"), (11.0, " (+11C)"), (-20.1, " (-20C)"), (0.4, " (+0C)"),
 ])
 def test_temp_suffix(temp, suffix):

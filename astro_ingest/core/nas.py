@@ -1,7 +1,7 @@
-"""Read-only index of an archive root (the real archive or the sandbox).
+"""Read-only index of the NAS: the Astronomy share (or the dev sandbox copy of it).
 
 One walk collects what the planner needs:
-- every raw frame by filename (to recognize frames already archived, and where),
+- every raw frame by filename (to recognize frames already ingested, and where),
 - every session folder with its camera/scope/night, whether it has flats, and its lights' rotation angles.
 The calibration library index reads headers and is built separately (`calibration_library`).
 
@@ -27,8 +27,8 @@ RETIRED = "_to_delete"
 
 
 @dataclass(frozen=True)
-class ArchivedFile:
-    rel: str    # path relative to the archive root
+class NasFile:
+    rel: str    # path relative to the share root
     size: int
 
 
@@ -47,17 +47,48 @@ class Session:
 
 
 @dataclass
-class ArchiveIndex:
+class NasIndex:
     root: Path
-    files: dict[str, list[ArchivedFile]] = field(default_factory=lambda: defaultdict(list))
+    files: dict[str, list[NasFile]] = field(default_factory=lambda: defaultdict(list))
     sessions: list[Session] = field(default_factory=list)
     target_folders: list[str] = field(default_factory=list)
 
-    def find(self, name: str) -> list[ArchivedFile]:
+    def find(self, name: str) -> list[NasFile]:
         return self.files.get(name, [])
 
     def sessions_on(self, night: dt.date) -> list[Session]:
         return [s for s in self.sessions if s.parsed and s.parsed.night == night]
+
+    def session(self, target_folder: str, folder: str) -> Session | None:
+        return next((s for s in self.sessions if s.target_folder == target_folder and s.folder == folder), None)
+
+
+def merge(*indexes: NasIndex) -> NasIndex:
+    """Union of several indexes (dev: the live share plus whatever has been ingested into the sandbox).
+
+    Paths are relative to each index's own root, so the same relative path in two indexes is one location.
+    """
+    merged = NasIndex(indexes[0].root)
+    sessions: dict[str, Session] = {}
+    for index in indexes:
+        for name, files in index.files.items():
+            seen = {f.rel for f in merged.files.get(name, [])}
+            merged.files[name].extend(f for f in files if f.rel not in seen)
+        for s in index.sessions:
+            if s.rel in sessions:
+                existing = sessions[s.rel]
+                existing.has_flats |= s.has_flats
+                existing.light_angles |= s.light_angles
+                existing.light_count = max(existing.light_count, s.light_count)
+            else:
+                sessions[s.rel] = Session(s.target_folder, s.folder, s.parsed, s.has_flats, set(s.light_angles),
+                                          s.light_count)
+        for t in index.target_folders:
+            if t not in merged.target_folders:
+                merged.target_folders.append(t)
+    merged.sessions = sorted(sessions.values(), key=lambda s: s.rel)
+    merged.target_folders.sort()
+    return merged
 
 
 def _entries(path: Path) -> list[os.DirEntry]:
@@ -65,7 +96,7 @@ def _entries(path: Path) -> list[os.DirEntry]:
         return sorted((e for e in it if not asiair.is_junk(e.name)), key=lambda e: e.name)
 
 
-def _walk_files(root: Path, start: Path, index: ArchiveIndex, on_file=None) -> None:
+def _walk_files(root: Path, start: Path, index: NasIndex, on_file=None) -> None:
     """Record every frame file under `start` (no symlinks, no _to_delete); call on_file(dir_rel_parts, name)."""
     stack = [start]
     while stack:
@@ -78,14 +109,14 @@ def _walk_files(root: Path, start: Path, index: ArchiveIndex, on_file=None) -> N
                     stack.append(Path(e.path))
             elif e.is_file() and FRAME_FILE.search(e.name):
                 rel = Path(e.path).relative_to(root).as_posix()
-                index.files[e.name].append(ArchivedFile(rel, e.stat().st_size))
+                index.files[e.name].append(NasFile(rel, e.stat().st_size))
                 if on_file:
                     on_file(Path(e.path).parent.relative_to(start).parts, e.name)
 
 
-def build_index(root: str | Path) -> ArchiveIndex:
+def build_index(root: str | Path) -> NasIndex:
     root = Path(root)
-    index = ArchiveIndex(root)
+    index = NasIndex(root)
     for e in _entries(root):
         if e.is_symlink() or not e.is_dir():
             continue
@@ -97,7 +128,7 @@ def build_index(root: str | Path) -> ArchiveIndex:
     return index
 
 
-def _index_target(root: Path, target: Path, index: ArchiveIndex) -> None:
+def _index_target(root: Path, target: Path, index: NasIndex) -> None:
     for e in _entries(target):
         if e.is_symlink() or not e.is_dir() or e.name == RETIRED:
             continue
@@ -123,7 +154,7 @@ def _index_target(root: Path, target: Path, index: ArchiveIndex) -> None:
 @dataclass(frozen=True)
 class CalibrationSet:
     kind: str                 # "Bias" | "Dark"
-    rel: str                  # folder relative to the archive root
+    rel: str                  # folder relative to the share root
     count: int
     camera: rules.Camera | None
     exposure_s: float | None

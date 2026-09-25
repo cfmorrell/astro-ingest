@@ -1,1 +1,1 @@
-"""astro-ingest: pull capture data off the ASIAIR, file it into the Astronomy archive, keep the ASIAIR clean."""
+"""astro-ingest: pull capture data off the ASIAIR, ingest it onto the NAS, keep the ASIAIR clean."""

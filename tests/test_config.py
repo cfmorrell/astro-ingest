@@ -8,7 +8,7 @@ from astro_ingest.config import Config, ConfigError, WriteGuardError
 def make_env(tmp_path, **overrides):
     env = {
         "ASTRO_ROOT": str(tmp_path / "root"),
-        "ASTRO_ARCHIVE": str(tmp_path / "archive"),
+        "ASTRO_NAS": str(tmp_path / "nas"),
         "STATE_DIR": str(tmp_path / "root" / "Z95-ClaudeReferences" / "ingest"),
         "TZ": "America/New_York",
     }
@@ -42,7 +42,7 @@ def test_write_guard(tmp_path):
     (tmp_path / "root").mkdir()
     assert cfg.check_writable(tmp_path / "root" / "Target" / "new.fit")
     assert cfg.check_writable(cfg.state_dir / "ingest.sqlite3")
-    for bad in (tmp_path / "archive" / "x.fit", tmp_path / "root" / ".." / "archive" / "x.fit", "/etc/passwd"):
+    for bad in (tmp_path / "nas" / "x.fit", tmp_path / "root" / ".." / "nas" / "x.fit", "/etc/passwd"):
         with pytest.raises(WriteGuardError):
             cfg.check_writable(bad)
 
@@ -50,7 +50,16 @@ def test_write_guard(tmp_path):
 def test_write_guard_refuses_symlink_escape(tmp_path):
     cfg = Config.from_env(make_env(tmp_path))
     (tmp_path / "root").mkdir()
-    (tmp_path / "archive").mkdir()
-    os.symlink(tmp_path / "archive", tmp_path / "root" / "escape")
+    (tmp_path / "nas").mkdir()
+    os.symlink(tmp_path / "nas", tmp_path / "root" / "escape")
     with pytest.raises(WriteGuardError):
         cfg.check_writable(tmp_path / "root" / "escape" / "x.fit")
+
+
+def test_old_astro_archive_name_still_accepted(tmp_path):
+    env = make_env(tmp_path)
+    del env["ASTRO_NAS"]
+    env["ASTRO_ARCHIVE"] = "/astro"
+    assert str(Config.from_env(env).astro_nas) == "/astro"
+    env["ASTRO_NAS"] = "/nas"
+    assert str(Config.from_env(env).astro_nas) == "/nas"

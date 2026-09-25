@@ -3,12 +3,12 @@
 ## Context
 **Goal:** make it simple for Chris to pull data off the ASIAIR, file it, and keep the ASIAIR clean.
 
-The archive was reorganized by hand over two days (see the `docs/ORGANIZATION_GUIDE.md` decision log). The rules and
+The Astronomy share was reorganized by hand over two days (see the `docs/ORGANIZATION_GUIDE.md` decision log). The rules and
 reference scripts from that work now become an app with this flow:
 1. Find the ASIAIR on the home network and connect to its `EMMC Images` SMB share.
 2. Index the share.
 3. Show a review screen of exactly what gets copied where.
-4. Copy into the archive under its rules, with checksum verification.
+4. Copy onto the NAS under the share's rules, with checksum verification.
 5. Write PROJECT_INFO and index links.
 6. After verification and Chris's approval, delete the copied files from the ASIAIR.
 
@@ -25,17 +25,17 @@ There's no stacking. State lives on the share (`STATE_DIR`).
   to lights by night + camera + rotation angle (mod 180°, because a meridian flip reports +180°: Soul's 3°/185° lights
   match its 185° flats). **`79deg` looks like a default or no-solve value**, so the angle is a hint that raises a
   warning, not a hard key.
-- **447 of the 1,026 Autorun/Plan frames (44%) are already archived** (matched by filename): Autorun lights,
+- **447 of the 1,026 Autorun/Plan frames (44%) are already ingested** (matched by filename): Autorun lights,
   5 flat sets, the 2026-08-29 bias and 300 s darks, NGC 7000 2025-07-03, and most of Elephant Trunk 09-13/14 and
-  Heart 09-15. A filename can sit in several archive folders (flats copied to sibling nights: 522 names).
-- **Archive evidence beats catalog matching.** `NGC 6888` matches CrescentNebula-NGC6888 by catalog, but Chris filed
-  the 2025-10-16 FMA135 frames under SadrRegion-IC1318 (a wide field that contains it). For already-archived frames,
-  where they are wins; for new wide-field (FMA135) frames, the review screen asks Chris to confirm the target.
+  Heart 09-15. A filename can sit in several NAS folders (flats copied to sibling nights: 522 names).
+- **Ingest evidence beats catalog matching.** `NGC 6888` matches CrescentNebula-NGC6888 by catalog, but Chris filed
+  the 2025-10-16 FMA135 frames under SadrRegion-IC1318 (a wide field that contains it). For already-ingested frames,
+  where they are wins. When a target is unclear (several candidates or none), the review screen asks.
 - **Orphan thumbnails exist:** 10 `_thn.jpg` for 2026-06-16 300 s darks whose `.fit` is gone.
 - **Other tools write to the share:** `Plan/Light/NGC 5907/astropup-view-scan.json` (+ `._` file), `.DS_Store` and
   `._*` files in Autorun/Plan (20 in all), including `._` leftovers of 10 NGC 5907 frames deleted from a Mac. They
   go on the cleanup screen as "unrecognized", each called out and approved individually.
-- **Frames missing from archived sessions:** 9 dawn Elephant Trunk, 9 dawn Heart, and 4 M42 frames. Chris deleted
+- **Frames missing from sessions already on the NAS:** 9 dawn Elephant Trunk, 9 dawn Heart, and 4 M42 frames. Chris deleted
   these as poor quality after the manual copy.
 - **New data:**
   - Soul 2026-09-23 and NGC 5907 06-15 (existing targets).
@@ -43,25 +43,25 @@ There's no stacking. State lives on the share (`STATE_DIR`).
   - 120 s darks from 2026-04-28 (a new library set).
   - One M13 frame from 2025-06-11.
   - **Orphan flats from 2026-05-16 (4.0 s) and 2026-06-24 (6.2 s).** No lights for those nights are on the ASIAIR
-    or in the archive (`103-ByDate` has nothing between 04-11 and 08-28). The lights may have been lost.
+    or on the NAS (`103-ByDate` has nothing between 04-11 and 08-28). The lights may have been lost.
 
 ## Decisions from Chris
-1. **Already-archived frames:** checksum-compare each one against its archive copy. Identical frames are offered for
+1. **Already-ingested frames:** checksum-compare each one against its NAS copy. Identical frames are offered for
    source cleanup and never re-copied.
 2. **Frames missing from an existing session:** ask per batch. The default is **append**, because Chris wants all data
    for now. Keep a per-frame record so a later quality-analysis feature can reject frames.
 3. **`Live`, `Preview`, `Video`, `log`, `GuidingDarkLibrary`:** ignored by default. They're listed as "not handled"
    and never deleted. Leave an opt-in hook for occasional EAA copies, but don't build it yet.
-4. **Source delete removes each `.fit` and its `_thn.jpg` together**, for both copied and already-archived frames.
+4. **Source delete removes each `.fit` and its `_thn.jpg` together**, for both copied and already-ingested frames.
    The cleanup screen lists both files per frame, and its totals include the thumbnails. Thumbnails left without a
    `.fit` are also offered for deletion. So is anything else inside `Autorun/`/`Plan/` (other tools' files such as
    `astropup-view-scan.json`, `._*` AppleDouble files, `.DS_Store`): each is **listed and called out by name** and
    deleted only when Chris approves it, like everything else. Nothing is silently ignored. Then prune empty directories, but never the ASIAIR's structural folders
-   (`Autorun/Light`, `Plan/Light`, …). Thumbnails are never copied to the archive.
+   (`Autorun/Light`, `Plan/Light`, …). Thumbnails are never copied to the NAS.
 5. **Calibration completeness gate before any delete.** Before a flat or dark-flat set is offered for deletion, the
    app searches for the lights it belongs to. A set that has lights is useful and gets filed with them, as normal.
-   - Where it searches: the ASIAIR (any object that night), archive sessions for the same or adjacent night with a
-     matching camera (and angle mod 180), and archived sessions that have **no flats** but whose camera, angle and
+   - Where it searches: the ASIAIR (any object that night), NAS sessions for the same or adjacent night with a
+     matching camera (and angle mod 180), and NAS sessions that have **no flats** but whose camera, angle and
      date fit.
    - **If no lights are found:** the set is flagged "lights not found, possibly lost" and **blocked from cleanup**
      until Chris either files it with a session he points to or explicitly releases it for deletion. The cleanup
@@ -87,13 +87,13 @@ There's no stacking. State lives on the share (`STATE_DIR`).
      `steps`), and `/jobs/{id}/log`.
    - **Versioning:** `config.VERSION` surfaced through `GET /health` and the header badge, staying under 1.0.
    - **Build:** a single repo and a GitHub Actions `docker-publish` workflow.
-   - **Scope boundary:** the stacker's Handoff says archival and sorting belong to *this* app. astro-ingest owns
-     "get it off the ASIAIR and into the archive"; the stacker reads from the archive (its read-only `CAPTURES_DIR`).
+   - **Scope boundary:** the stacker's Handoff says importing and sorting belong to *this* app. astro-ingest owns
+     "get it off the ASIAIR and onto the NAS"; the stacker reads from the NAS (its read-only `CAPTURES_DIR`).
 
 ## Architecture
 ```
 astro_ingest/
-  config.py        env: ASTRO_ROOT (write target), ASTRO_ARCHIVE (read-only lookups), STATE_DIR, TZ,
+  config.py        env: ASTRO_ROOT (write target), ASTRO_NAS (read-only lookups), STATE_DIR, TZ,
                    ASIAIR_SUBNET=192.168.1.0/24, ASIAIR_SHARE="EMMC Images", optional ASIAIR_HOST (pin an IP),
                    optional ASIAIR_ROOT (use a local dir/mount instead of SMB: the sandbox sample in dev).
                    Validates at startup; exposes the write guard.
@@ -112,15 +112,15 @@ astro_ingest/
                    FOCALLEN→scope table, temp suffix from CCD-TEMP, site table + 4 km lookup, naming
     targets.py     targets.csv; normalize "M 8"/"NGC 7000"/"SoulNebula"; catalog-ID then name match;
                    unmatched → decision queue; new-target proposals (folder, name, M/NGC/IC/other)
-    archive.py     walk rules (no symlinks; skip 0*/1*/Z*/dotfiles/_to_delete); filename→path index;
+    nas.py         walk rules (no symlinks; skip 0*/1*/Z*/dotfiles/_to_delete); filename→path index;
                    session index (night, camera, scope, angle, has-flats); calibration library index
     planner.py     classify (IMAGETYP, then prefix; short "Dark" matching flat exposure → darkflat), group per
                    target/night/camera/scope, flat↔lights matching + completeness gate (decision 5), darkflat policy
                    (294MC/183MM only), library routing with duplicate check + 10-frame cap, §7.5 collisions,
-                   multi-night split + flat copies + notes, already-archived / missing-from-session detection.
-                   PlanItem = (src, dst, action, reason, warnings). Actions: copy | already-archived | append |
+                   multi-night split + flat copies + notes, already-ingested / missing-from-session detection.
+                   PlanItem = (src, dst, action, reason, warnings). Actions: copy | already-ingested | append |
                    needs-decision | calib-without-lights | over-cap | ignored
-    fsops.py       the ONLY archive writer: path guard (under ASTRO_ROOT/STATE_DIR only), streaming copy +
+    fsops.py       the ONLY writer to the share: path guard (under ASTRO_ROOT/STATE_DIR only), streaming copy +
                    BLAKE2b → *.part → fsync → no-clobber rename → re-read + re-hash; never .DS_Store/._*;
                    retire to _to_delete
     cleanup.py     source deletes, only via Source.delete, only verified + approved + gate-passed items
@@ -143,7 +143,7 @@ static/            index.html + app.js + styles.css (stacker base + ingest secti
                    chips/checklists, warnings as .session-mismatch-warning, and the ASIAIR _thn.jpg previews
                    in the stacker's lightbox. Also an active-jobs panel and a log view per job.
 tests/             pytest; tiny generated FITS fixtures (hand-written header + 2×2 data) in an ASIAIR-shaped tree,
-                   a fixture archive, and a fake Source for discovery/SMB-free tests
+                   a fixture NAS tree, and a fake Source for discovery/SMB-free tests
 ```
 ### Local time (EDT vs EST)
 - **Primary source is the filename timestamp.** The ASIAIR writes local wall-clock time (`20260923-211420`), and the
@@ -171,14 +171,14 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    - Sync `docs/ORGANIZATION_GUIDE.md` with the live copy.
    - Update CLAUDE.md's "Suggested stack" to record today's decisions: the stacker-style static frontend, direct SMB
      plus discovery, the decisions above, and the goal statement.
-1. **Core rules library and LocalDirSource (read-only).** Port `fits`, `asiair`, `rules`, `targets` and `archive`,
+1. **Core rules library and LocalDirSource (read-only).** Port `fits`, `asiair`, `rules`, `targets` and `nas` (was `archive`),
    with tests for every rule: night date across EDT/EST, FOCALLEN ranges, camera names, temp suffix, site lookup,
    object normalization, thumbnail pairing. `cli scan` inventories `_asiair-sample`.
 2. **Planner and review screen (read-only).** This is the first UI commit: the stacker `styles.css` base, the
    `index.html` shell (topbar, stepper, cards), the `/health` endpoint with `VERSION`, then the Review step.
    Acceptance test: the plan for `_asiair-sample` against `/astro` must
    reproduce the survey:
-   - archived sets
+   - already-ingested sets
    - 22 missing-from-session frames, defaulting to append
    - Soul and NGC 5907 sessions
    - two new-target proposals
@@ -188,7 +188,7 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    dashboard status and Find button. Test with a fake network in unit tests. Against the live ASIAIR, only list and
    read. Check SMB throughput and reconnect behavior.
 4. **Copy and verify into the sandbox.** `fsops`, `jobs`, the op log, approval, and progress. Checksum
-   already-archived items against `ASTRO_ARCHIVE`. Test resume-after-kill and source drop mid-copy. Confirm the
+   already-ingested items against `ASTRO_NAS`. Test resume-after-kill and source drop mid-copy. Confirm the
    no-clobber rename on shfs.
 5. **Filing extras.** PROJECT_INFO for touched sessions, library reindex, multi-night split with `.flats_are_copies`
    and notes, new targets (targets.csv row, then links) after approval, index links incl. `103-ByDate`, calneeds
@@ -198,7 +198,7 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    dirs, and log every delete. Test against a scratch copy (`/astro-sandbox/_asiair-scratch`) with LocalDirSource.
    Test SMB deletes against a throwaway Samba share before the real ASIAIR is ever touched.
 7. **Production.** App Dockerfile, a `docker-publish` workflow (same as the stacker), and a run script (`ASTRO_ROOT=/astro` rw, LAN access for discovery), put the app
-   behind Nginx Proxy Manager with authentication (it deletes source data), and confirm the archive backup first.
+   behind Nginx Proxy Manager with authentication (it deletes source data), and confirm the NAS backup first.
 
 ## Verification
 - Run `pytest` at every phase. The pure library carries most of the coverage.
