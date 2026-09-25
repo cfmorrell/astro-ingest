@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astro-ingest"
+description = "Pull capture data off the ASIAIR, file it into the Astronomy archive, and keep the ASIAIR clean."
+requires-python = ">=3.12"
+dynamic = ["version"]
+dependencies = [
+    "fastapi>=0.110,<1.0",
+    "uvicorn[standard]>=0.29,<1.0",
+    "smbprotocol>=1.13,<2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+astro-ingest = "astro_ingest.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "astro_ingest.config.VERSION" }
+
+[tool.setuptools.packages.find]
+include = ["astro_ingest*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
