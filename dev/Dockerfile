@@ -5,6 +5,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git openssh-client curl ca-certificates ripgrep less nano procps tini tzdata vim tmux\
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -u 99 -g 100 -m -d /home/dev -s /bin/bash dev
+# Login shells (bash -l, UnRAID's console button) reset PATH in /etc/profile; profile.d runs after that,
+# so ~/.local/bin (where Claude Code is installed) stays on PATH in every kind of shell.
+RUN echo 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac' \
+        > /etc/profile.d/local-bin.sh
 ENV PATH=/home/dev/.local/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
