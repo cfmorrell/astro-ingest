@@ -68,3 +68,32 @@ def write_fits(path: Path, header: dict | None = None, width: int = 2, height: i
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_pad(b"".join(cards), b" ") + _pad(pixels, b"\0"))
     return path
+
+
+def asiair_frame(root: Path, folder: str, type_: str, saved_local: str, exposure_s: float = 300.0,
+                 obj: str | None = None, angle: int | None = None, temp_c: float = -10.0, seq: int = 1,
+                 tz: str = "America/New_York", thumb: bool = True, clock_error_s: float = 0,
+                 **cards) -> Path:
+    """Write an ASIAIR-named frame (and its _thn.jpg) whose DATE-OBS matches the filename time.
+
+    `saved_local` is the true local time at the END of the exposure ('20260923-211420'). `clock_error_s`
+    shifts only the filename timestamp, simulating an ASIAIR whose clock or time zone is wrong.
+    """
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    saved = dt.datetime.strptime(saved_local, "%Y%m%d-%H%M%S")
+    start_utc = (saved - dt.timedelta(seconds=exposure_s)).replace(tzinfo=ZoneInfo(tz)).astimezone(dt.timezone.utc)
+    exp = f"{exposure_s * 1000:.1f}ms" if exposure_s < 1 else f"{exposure_s:.1f}s"  # as ASIAIR: 800.0ms, 1.0ms
+    stamp = (saved + dt.timedelta(seconds=clock_error_s)).strftime("%Y%m%d-%H%M%S")
+    name = "_".join(p for p in (
+        type_, obj, exp, "Bin1", "2600MC", "gain100", stamp,
+        f"{angle}deg" if angle is not None else None, f"{temp_c:.1f}C", f"{seq:04d}") if p is not None) + ".fit"
+    header = {**ASIAIR_LIGHT, "IMAGETYP": type_, "EXPTIME": exposure_s, "CCD-TEMP": temp_c,
+              "DATE-OBS": start_utc.replace(tzinfo=None).isoformat(timespec="microseconds"), **cards}
+    if obj:
+        header["OBJECT"] = obj
+    path = write_fits(root / folder / name, header)
+    if thumb:
+        path.with_name(path.stem + "_thn.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+    return path

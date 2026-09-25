@@ -25,8 +25,15 @@ There's no stacking. State lives on the share (`STATE_DIR`).
   to lights by night + camera + rotation angle (mod 180°, because a meridian flip reports +180°: Soul's 3°/185° lights
   match its 185° flats). **`79deg` looks like a default or no-solve value**, so the angle is a hint that raises a
   warning, not a hard key.
-- **About 60% of the sample is already archived** (matched by filename): Autorun lights, 5 flat sets, the 2026-08-29
-  bias and 300 s darks, NGC 7000 2025-07-03, and most of Elephant Trunk 09-13/14 and Heart 09-15.
+- **447 of the 1,026 Autorun/Plan frames (44%) are already archived** (matched by filename): Autorun lights,
+  5 flat sets, the 2026-08-29 bias and 300 s darks, NGC 7000 2025-07-03, and most of Elephant Trunk 09-13/14 and
+  Heart 09-15. A filename can sit in several archive folders (flats copied to sibling nights: 522 names).
+- **Archive evidence beats catalog matching.** `NGC 6888` matches CrescentNebula-NGC6888 by catalog, but Chris filed
+  the 2025-10-16 FMA135 frames under SadrRegion-IC1318 (a wide field that contains it). For already-archived frames,
+  where they are wins; for new wide-field (FMA135) frames, the review screen asks Chris to confirm the target.
+- **Orphan thumbnails exist:** 10 `_thn.jpg` for 2026-06-16 300 s darks whose `.fit` is gone.
+- **Other tools write to the share:** `Plan/Light/NGC 5907/astropup-view-scan.json` (+ `._` file). Unknown files are
+  never deleted, so their folders are never pruned.
 - **Frames missing from archived sessions:** 9 dawn Elephant Trunk, 9 dawn Heart, and 4 M42 frames. Chris deleted
   these as poor quality after the manual copy.
 - **New data:**
