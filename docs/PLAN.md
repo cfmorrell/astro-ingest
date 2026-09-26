@@ -222,7 +222,15 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    decision, offered only for the same target/camera/scope/filter within 7 days and rotation mod 180° within ±3°
    (never 79°); **default is don't borrow** ("a bad flat is worse than no flat"). Sandbox run on Splinter 06-15:
    PROJECT_INFO (64 lights, 10 flats, 2026-08-29 library darks/bias), 13 links, re-preview empty.
-6. **Source cleanup.** Only verified, approved, gate-passed items. Before deleting, re-check source size and mtime
+6. **Clean up (built 2026-09-26; real-device deletes wait for Chris's backups).** Scratch run through the app
+   (`ASIAIR_ROOT=/astro-sandbox/_asiair-scratch`, a `cp -al` copy of the sample): Verify read all 520 older frames
+   (23.3 GB) and matched every NAS copy by BLAKE2b in 77 min at ~4.5 MB/s, 0 mismatches; Clean up with the default
+   ticks deleted exactly the 520 verified `.fit` + 520 `_thn.jpg` (27.1 GB; before/after listing differs by exactly
+   those 1,040 files), each NAS copy re-hashed first, 6 emptied object folders removed, type folders kept; callout
+   groups untouched; `_asiair-sample` and the share unchanged apart from the app's own state/log files. SMB deletes
+   tested against a throwaway impacket server (`tests/test_smb_cleanup.py`). `ALLOW_DEVICE_DELETE=1` required for a
+   real device.
+   Original plan: only verified, approved, gate-passed items. Before deleting, re-check source size and mtime
    against the scan. Delete each `.fit` **and** its `_thn.jpg` plus orphan thumbnails, prune empty non-structural
    dirs, and log every delete. Test against a scratch copy (`/astro-sandbox/_asiair-scratch`) with LocalDirSource.
    Test SMB deletes against a throwaway Samba share before the real ASIAIR is ever touched.
