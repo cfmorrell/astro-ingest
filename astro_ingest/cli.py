@@ -349,6 +349,55 @@ def cmd_catalog(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cleanup(args: argparse.Namespace) -> int:
+    """Show what Clean up would delete from the device; --verify checksums frames already on the NAS; with --yes,
+    delete the verified frames (plus any callout groups named with --include)."""
+    from astro_ingest import cleanup
+    from astro_ingest.service import SourceUnavailable, open_source, scan_and_plan
+    cfg = load_config()
+    if cfg is None:
+        return 2
+    try:
+        planned = scan_and_plan(cfg, open_source(cfg, args.source))
+    except SourceUnavailable as e:
+        print(f"cleanup: {e}", file=sys.stderr)
+        return 2
+    last = [-10.0]
+
+    def progress(pct: float, msg: str, **stats) -> None:
+        if pct - last[0] >= 10 or pct >= 100:
+            print(f"[{pct:5.1f}%] {msg}", flush=True)
+            last[0] = pct
+
+    if args.verify:
+        print(cleanup.verify(cfg, planned, progress))
+    pv = cleanup.preview(cfg, planned)
+    include = {"verified"} | set(filter(None, (args.include or "").split(",")))
+    unknown = include - set(cleanup.GROUPS)
+    if unknown:
+        print(f"cleanup: unknown group(s) {sorted(unknown)}; groups: {', '.join(cleanup.GROUPS)}", file=sys.stderr)
+        return 2
+    print(f"Clean up on {pv.source}{'' if pv.device_delete_allowed else '  (deleting is switched off: ALLOW_DEVICE_DELETE)'}")
+    selected = []
+    for g in pv.groups():
+        pick = g["selectable"] and g["id"] in include
+        print(f"  {'DELETE' if pick else '      '} {g['files']:5d} files {_gb(g['bytes'])}  {g['label']}"
+              f"{'  (' + g['note'] + ')' if g['note'] else ''}")
+        if pick:
+            selected += [i["rel"] for i in g["items"]]
+    if not args.yes or not selected:
+        print("Nothing deleted. Run again with --yes to delete the files marked DELETE." if selected
+              else "Nothing to delete.")
+        return 0
+    cid = cleanup.approve(cfg, planned, selected)
+    result = cleanup.run(cfg, planned, cid, progress)
+    print({k: v for k, v in result.items() if k not in ("skipped", "failed")})
+    for k in ("skipped", "failed"):
+        for r in result.get(k, []):
+            print(f"  {k}: {r['rel']}: {r['detail']}")
+    return 0 if not result.get("failed") and not result.get("unexpected_missing") and not result.get("stopped") else 1
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -401,6 +450,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("catalog", help="after copying: PROJECT_INFO, targets.csv, index links, notes")
     p.add_argument("--yes", action="store_true", help="write the changes (default: only show them)")
     p.set_defaults(func=cmd_catalog)
+
+    p = sub.add_parser("cleanup", help="delete from the device what is verified on the NAS (and callouts you name)")
+    p.add_argument("--source", help="override the source (a local folder, 'smb' or smb://host/share)")
+    p.add_argument("--verify", action="store_true", help="first checksum frames already on the NAS against the device")
+    p.add_argument("--include", help="also delete these callout groups, e.g. rejected,left-out,over-cap,not-kept,other,orphan-thumb")
+    p.add_argument("--yes", action="store_true", help="delete (default: only show what would be deleted)")
+    p.set_defaults(func=cmd_cleanup)
 
     p = sub.add_parser("serve", help="run the web app")
     p.add_argument("--host", default="0.0.0.0")

@@ -1,7 +1,7 @@
 """FastAPI app: a JSON API plus the static frontend, in the same shape as astro-stacker.
 
 Writes only to STATE_DIR / CACHE_DIR (answers, frame-quality stats, rendered previews), except Copy & verify and
-Catalog, which write to the share through fsops. Nothing on the ASIAIR is deleted until the cleanup step (phase 6). StaticFiles is mounted last so it
+Catalog, which write to the share through fsops, and Clean up, the only step that deletes from the device. StaticFiles is mounted last so it
 never shadows an API route.
 """
 
@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from astro_ingest import analysis, batch, catalog, db, jobs, service, staging, state
+from astro_ingest import analysis, batch, catalog, cleanup, db, jobs, service, staging, state
 from astro_ingest.sources import devices, discover
 from astro_ingest.config import VERSION, Config
 from astro_ingest.core import imaging
@@ -169,8 +169,8 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/stage/run")
     def run_stage():
-        if jobs.running("stage") or jobs.running("quality"):
-            raise HTTPException(409, "staging or scoring is already running")
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
         p = planned()
         src = p.source
         entries = {f.rel: f.entry for f in p.scan.frames}
@@ -207,8 +207,8 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/copy/run")
     def copy_run():
-        if jobs.running("copy") or jobs.running("stage"):
-            raise HTTPException(409, "a copy or staging run is already in progress")
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
         batch_id = db.unfinished_batch(cfg)       # resume an interrupted batch before approving a new one
         if batch_id is None:
             p = planned()
@@ -238,14 +238,66 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/catalog/run")
     def catalog_run():
-        if jobs.running("copy") or jobs.running("catalog"):
-            raise HTTPException(409, "a copy or catalog run is in progress")
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
 
         def work(progress) -> dict:
             return catalog.run(cfg, catalog.preview(cfg), progress)
 
         job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="catalog")
         return {"job_id": job.id}
+
+    # ---------------- clean up: delete from the device what's verified on the NAS, or ticked one by one
+
+    BUSY = ("stage", "quality", "copy", "catalog", "verify", "cleanup")
+
+    def busy() -> str | None:
+        return next((k for k in BUSY if jobs.running(k)), None)
+
+    @app.get("/api/cleanup/preview")
+    def cleanup_preview():
+        p = planned()
+        last = db.cleanups(cfg, 1)
+        return cleanup.preview(cfg, p).to_dict() | {
+            "device": service.remembered_device(cfg) if not cleanup._is_local(p.source) else None,
+            "unfinished": db.unfinished_cleanup(cfg), "last": last[0] if last else None}
+
+    @app.post("/api/cleanup/verify")
+    def cleanup_verify():
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
+        p = planned()
+
+        def work(progress) -> dict:
+            result = cleanup.verify(cfg, p, progress)
+            replan()
+            return result
+
+        job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="verify")
+        return {"job_id": job.id}
+
+    @app.post("/api/cleanup/run")
+    def cleanup_run(selected: list[str] = Body([], embed=True)):
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
+        p = planned()
+        cid = db.unfinished_cleanup(cfg)     # resume an interrupted run before approving a new one
+        if cid is None:
+            try:
+                cid = cleanup.approve(cfg, p, selected)
+            except cleanup.DeleteRefused as e:
+                raise HTTPException(403, str(e)) from e
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from e
+
+        def work(progress) -> dict:
+            result = cleanup.run(cfg, p, cid, progress)
+            with lock:
+                cache["plan"] = service.scan_and_plan(cfg, source())   # the device changed: scan again
+            return result
+
+        job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="cleanup")
+        return {"job_id": job.id, "cleanup_id": cid}
 
     # ---------------- previews (astro-stacker's rendering, cached in CACHE_DIR)
 

@@ -6,7 +6,7 @@
 
 const STEPS = ["connect", "scan", "stage", "review", "copy", "catalog", "clean"];
 const STEP_LABELS = { connect: "Connect", scan: "Scan", stage: "Stage", review: "Review", copy: "Copy & verify", catalog: "Catalog", clean: "Clean up" };
-const STEP_PHASE = { clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
+const STEP_PHASE = {};  // steps not built yet: shown, disabled, tagged with their phase
 const LARGE_GROUP_THRESHOLD = 20;  // beyond this, collapse to flagged frames +/- 2 neighbours (as astro-stacker)
 const SMALL_GROUP_PEERS = 10;      // fewer frames than this to compare against: scoring is less reliable (M42 04-11)
 const THUMB = 320;
@@ -44,6 +44,10 @@ const state = {
   lastBatch: null,       // the most recent copy batch
   catalogPreview: null,  // /api/catalog/preview: what the Catalog step would write
   catalogRunning: false,
+  cleanPreview: null,    // /api/cleanup/preview: what Clean up may delete from the device, by group
+  cleanUnticked: new Set(),  // files in default-ticked groups that Chris unticked
+  cleanTicked: new Set(),    // callout files Chris ticked
+  cleanRunning: false,
   plan: null,
   itemsBySrc: {},
   expandedGroups: {},    // strip id -> Set of "start-end" collapsed ranges the user expanded
@@ -419,6 +423,10 @@ function stepStatus(step) {
     case "stage": return { available: planned, complete: planned && selectedItems().length > 0 && selectedItems().every((i) => i.staged) };
     case "review": return { available: planned, complete: planned && state.plan.summary.decisions_open === 0 };
     case "copy": return { available: planned, complete: !!(state.copyPreview && state.copyPreview.copies === 0 && state.lastBatch && state.lastBatch.status === "done") };
+    case "clean": {
+      const c = state.cleanPreview;
+      return { available: planned, complete: !!(c && c.last && c.last.status === "done" && !cleanSelected().length) };
+    }
     case "catalog": {
       const c = state.catalogPreview;
       return { available: true, complete: !!(c && !c.summary.batches.length && !c.summary.writes && state.lastBatch) };
@@ -455,6 +463,7 @@ function showActiveStep() {
   });
   renderStepper();
   if (state.activeStep === "catalog" && !state.catalogRunning) loadCatalog();
+  if (state.activeStep === "clean" && !state.cleanRunning) loadCleanStep();
 }
 
 // ---------- connect / scan ----------
@@ -974,6 +983,182 @@ async function runCatalog() {
   }
 }
 
+// ---------- clean up ----------
+
+function cleanSelected() {
+  const c = state.cleanPreview;
+  if (!c) return [];
+  const out = [];
+  c.groups.filter((g) => g.selectable).forEach((g) => g.items.forEach((i) => {
+    if (g.ticked ? !state.cleanUnticked.has(i.rel) : state.cleanTicked.has(i.rel)) out.push(i);
+  }));
+  return out;
+}
+
+function setCleanTick(group, rel, on) {
+  if (group.ticked) { if (on) state.cleanUnticked.delete(rel); else state.cleanUnticked.add(rel); }
+  else if (on) state.cleanTicked.add(rel); else state.cleanTicked.delete(rel);
+}
+
+async function loadCleanStep() {
+  setStepBadge("clean-status-badge", "", "loading…");
+  try {
+    state.cleanPreview = await api("GET", "/api/cleanup/preview");
+  } catch (e) {
+    setStepBadge("clean-status-badge", "danger", "error");
+    const box = document.getElementById("clean-summary");
+    box.innerHTML = "";
+    box.appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+    return;
+  }
+  renderCleanStep();
+  renderStepper();
+}
+
+function deviceName(c) {
+  return c.device ? `${c.device.nickname || c.device.label || "the ASIAIR"} (${c.device.host})` : c.source.replace(/^local:/, "");
+}
+
+function renderCleanStep(live) {
+  const c = state.cleanPreview;
+  if (!c) return;
+  const sel = cleanSelected();
+  const selBytes = sel.reduce((a, i) => a + i.size, 0);
+  const selFiles = sel.reduce((a, i) => a + 1 + (i.thumb ? 1 : 0), 0);
+  const tv = c.to_verify;
+  const rate = (state.plan && state.plan.rate_mb_s) || 10;
+  const box = document.getElementById("clean-summary");
+  box.innerHTML = "";
+  const boxes = live && live.files_total !== undefined
+    ? [[live.eta_s !== null && live.eta_s !== undefined ? clock(live.eta_s) : "estimating…", "time remaining", "ok"],
+      [`${live.files_done} / ${live.files_total}`, "frames verified"], [`${gb(live.bytes_done)} / ${gb(live.bytes_total)}`, "read from the device"],
+      [live.mb_s ? `${live.mb_s} MB/s` : "…", "speed"]]
+    : [[String(selFiles), `files ticked · ${gb(selBytes)} to free`, selFiles ? "ok" : ""],
+      [String(tv.files), `frames to verify · ${gb(tv.bytes)}`],
+      [tv.files ? `~${clock(tv.bytes / 1e6 / rate)}` : "—", `to verify over Wi-Fi at ~${rate} MB/s`],
+      [String(c.uncatalogued_batches), "copy batches not catalogued yet"]];
+  box.appendChild(el("div", { class: "stat-row" }, boxes.map(([n, l, k]) => stat(n, l, k))));
+
+  const vbtn = document.getElementById("clean-verify-btn");
+  const rbtn = document.getElementById("clean-run-btn");
+  if (!state.cleanRunning) {
+    vbtn.disabled = !tv.files;
+    vbtn.textContent = tv.files ? `Verify ${tv.files} frame${tv.files === 1 ? "" : "s"} already on the NAS (${gb(tv.bytes)})` : "Nothing to verify";
+    rbtn.disabled = !c.device_delete_allowed || (!selFiles && !c.unfinished);
+    rbtn.textContent = c.unfinished ? `Resume clean-up ${c.unfinished}` : `Delete ${selFiles} file${selFiles === 1 ? "" : "s"} (${gb(selBytes)}) from ${deviceName(c)}`;
+  }
+  setStepBadge("clean-status-badge", live ? "accent" : c.device_delete_allowed ? (selFiles ? "" : "ok") : "warn",
+    live ? "working…" : !c.device_delete_allowed ? "deleting is switched off" : selFiles ? "awaiting approval" : "nothing ticked");
+  const guard = document.getElementById("clean-guard");
+  guard.innerHTML = "";
+  if (!c.device_delete_allowed) guard.appendChild(el("div", { class: "session-mismatch-warning" }, [
+    "⚠ Deleting from the device is switched off (ALLOW_DEVICE_DELETE is not 1). Everything else on this page works; nothing can be deleted until it's switched on."]));
+  if (c.uncatalogued_batches) guard.appendChild(el("div", { class: "hint" }, [
+    `${c.uncatalogued_batches} copy batch${c.uncatalogued_batches === 1 ? " hasn't" : "es haven't"} been catalogued yet (Catalog step). That doesn't block clean-up.`]));
+
+  const list = document.getElementById("clean-groups");
+  list.innerHTML = "";
+  c.groups.forEach((g) => {
+    const inGroup = g.items.filter((i) => (g.ticked ? !state.cleanUnticked.has(i.rel) : state.cleanTicked.has(i.rel)));
+    const header = el("div", { class: "card-header" }, [
+      el("div", { style: "display:flex; gap:10px; align-items:center; flex-wrap:wrap;" }, [
+        g.selectable ? el("input", {
+          type: "checkbox", checked: inGroup.length === g.items.length && g.items.length ? "" : null,
+          title: "tick or untick every file in this group",
+          onchange: (e) => { g.items.forEach((i) => setCleanTick(g, i.rel, e.target.checked)); renderCleanStep(); },
+        }, []) : null,
+        el("div", { class: "card-title" }, [g.label]),
+        el("span", { class: `badge ${g.selectable ? (g.ticked ? "ok" : "warn") : ""}` }, [`${g.files} file${g.files === 1 ? "" : "s"} · ${gb(g.bytes)}`]),
+        g.selectable ? el("span", { class: "hint", style: "margin:0;" }, [`${inGroup.length} of ${g.items.length} ticked`]) : null,
+      ]),
+    ]);
+    const body = [header];
+    if (g.note) body.push(el("p", { class: "hint", style: "margin-top:0;" }, [g.note]));
+    if (g.items.length) {
+      body.push(toggleList(`show ${g.items.length} item${g.items.length === 1 ? "" : "s"}`, g.items.map((i) => el("label", {
+        style: "display:flex; gap:8px; align-items:baseline;", title: i.how || "",
+      }, [
+        g.selectable ? el("input", { type: "checkbox", checked: inGroup.includes(i) ? "" : null,
+          onchange: (e) => { setCleanTick(g, i.rel, e.target.checked); renderCleanStep(); } }, []) : null,
+        el("span", { class: "session-path" }, [i.rel + (i.thumb ? "  + thumbnail" : "")]),
+        i.nas.length ? el("span", { class: "hint", style: "margin:0;" }, [`NAS: ${i.nas[0]}`]) : (i.how ? el("span", { class: "hint", style: "margin:0;" }, [i.how]) : null),
+      ]))));
+    }
+    list.appendChild(el("div", { class: "card" }, body));
+  });
+}
+
+function renderCleanResult(res) {
+  const box = document.getElementById("clean-result");
+  box.innerHTML = "";
+  if (!res) return;
+  if (res.stopped) { box.appendChild(el("div", { class: "session-mismatch-warning" }, [`⚠ ${res.stopped}`])); return; }
+  if (res.verified !== undefined) {
+    box.appendChild(el("div", { class: "hint" }, [`Verified ${res.verified} frame${res.verified === 1 ? "" : "s"}` +
+      `${res.mismatch ? `, ${res.mismatch} differ from the NAS copy` : ""}${res.nas_missing ? `, ${res.nas_missing} NAS cop${res.nas_missing === 1 ? "y" : "ies"} not found` : ""}; read ${gb(res.bytes)} in ${clock(res.seconds)}.`]));
+    return;
+  }
+  box.appendChild(el("div", { class: "hint" }, [
+    `Clean-up ${res.cleanup}: ${res.deleted} file${res.deleted === 1 ? "" : "s"} deleted (${gb(res.bytes_freed)} freed)${res.already_gone ? `, ${res.already_gone} already gone` : ""}, ${res.skipped.length} skipped, ${res.failed.length} failed${res.pruned.length ? `, ${res.pruned.length} empty folder${res.pruned.length === 1 ? "" : "s"} removed` : ""}. The device was listed again afterwards: ${res.unexpected_missing.length || res.still_there.length ? "see below" : "exactly the deleted files are gone"}. Log: ${res.log}`]));
+  const rows = (label, items, cls) => items.length && box.appendChild(el("div", { class: cls }, [`${label}:`, ...items.map((r) => el("div", { class: "session-path" }, [typeof r === "string" ? r : `${r.rel} — ${r.detail}`]))]));
+  rows("Failed", res.failed, "error-banner");
+  rows("Missing but not deleted by this run", res.unexpected_missing, "error-banner");
+  rows("Still on the device after deleting", res.still_there, "error-banner");
+  rows("Kept (a gate didn't pass)", res.skipped, "session-mismatch-warning");
+}
+
+async function watchCleanJob(jobId) {
+  state.cleanRunning = true;
+  document.getElementById("clean-verify-btn").disabled = true;
+  document.getElementById("clean-run-btn").disabled = true;
+  await pollJob(jobId, document.getElementById("clean-progress"), async (snap) => {
+    state.cleanRunning = false;
+    if (snap.status === "succeeded") renderCleanResult(snap.result);
+    else {
+      document.getElementById("clean-result").innerHTML = "";
+      document.getElementById("clean-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "failed"]));
+    }
+    state.cleanUnticked.clear();
+    state.cleanTicked.clear();
+    await loadPlan(false);
+    await loadCleanStep();
+  }, (snap) => renderCleanStep(snap.stats));
+}
+
+async function runCleanVerify() {
+  const tv = state.cleanPreview.to_verify;
+  if (!confirm(`Read ${tv.files} frame${tv.files === 1 ? "" : "s"} (${gb(tv.bytes)}) from the device once and compare each with its NAS copy? Nothing is deleted or changed.`)) return;
+  try {
+    const { job_id } = await api("POST", "/api/cleanup/verify");
+    await watchCleanJob(job_id);
+  } catch (e) {
+    document.getElementById("clean-result").innerHTML = "";
+    document.getElementById("clean-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+  }
+}
+
+async function runCleanDelete() {
+  const c = state.cleanPreview;
+  const sel = cleanSelected();
+  let what;
+  if (c.unfinished) what = `Resume the interrupted clean-up ${c.unfinished} on ${deviceName(c)}?`;
+  else {
+    const per = {};
+    sel.forEach((i) => { const g = c.groups.find((x) => x.items.includes(i)); per[g.label] = (per[g.label] || 0) + 1 + (i.thumb ? 1 : 0); });
+    const files = Object.values(per).reduce((a, b) => a + b, 0);
+    what = `Delete ${files} file${files === 1 ? "" : "s"} (${gb(sel.reduce((a, i) => a + i.size, 0))}) from ${deviceName(c)}?\n\n` +
+      Object.entries(per).map(([k, n]) => `  ${n}  ${k}`).join("\n") + "\n\nThis can't be undone.";
+  }
+  if (!confirm(what)) return;
+  try {
+    const { job_id } = await api("POST", "/api/cleanup/run", { selected: sel.map((i) => i.rel) });
+    await watchCleanJob(job_id);
+  } catch (e) {
+    document.getElementById("clean-result").innerHTML = "";
+    document.getElementById("clean-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+  }
+}
+
 // ---------- review ----------
 
 function renderReview() {
@@ -1238,6 +1423,8 @@ async function resumeRunningJob() {
     if (stage) { state.activeStep = "stage"; showActiveStep(); await watchStageJob(stage.id); }
     const copying = jobsNow.find((j) => j.kind === "copy" && j.status === "running");
     if (copying) { state.activeStep = "copy"; showActiveStep(); await watchCopyJob(copying.id); }
+    const cleaning = jobsNow.find((j) => (j.kind === "cleanup" || j.kind === "verify") && j.status === "running");
+    if (cleaning) { state.activeStep = "clean"; showActiveStep(); await watchCleanJob(cleaning.id); }
     const cataloguing = jobsNow.find((j) => j.kind === "catalog" && j.status === "running");
     if (cataloguing) { state.activeStep = "catalog"; showActiveStep(); await watchCatalogJob(cataloguing.id); }
     const running = jobsNow.find((j) => j.kind === "quality" && j.status === "running");
@@ -1307,6 +1494,9 @@ document.getElementById("stage-next-btn").addEventListener("click", () => { stat
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
 document.getElementById("copy-run-btn").addEventListener("click", runCopy);
 document.getElementById("catalog-run-btn").addEventListener("click", runCatalog);
+document.getElementById("catalog-next-btn").addEventListener("click", () => { state.activeStep = "clean"; showActiveStep(); });
+document.getElementById("clean-verify-btn").addEventListener("click", runCleanVerify);
+document.getElementById("clean-run-btn").addEventListener("click", runCleanDelete);
 document.getElementById("review-next-btn").addEventListener("click", () => { state.activeStep = "copy"; showActiveStep(); });
 document.getElementById("copy-next-btn").addEventListener("click", () => { state.activeStep = "catalog"; showActiveStep(); });
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });

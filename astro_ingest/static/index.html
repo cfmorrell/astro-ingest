@@ -190,7 +190,7 @@
       </div>
       <div class="progress-wrap">
         <button id="catalog-run-btn" class="primary">Write catalog updates</button>
-        <button id="catalog-next-btn" class="ghost" disabled title="The Clean up step arrives in phase 6">Next: Clean up → (phase 6)</button>
+        <button id="catalog-next-btn" class="ghost">Next: Clean up →</button>
       </div>
       <div id="catalog-result"></div>
       <p class="hint">After Copy &amp; verify: writes <code>PROJECT_INFO.txt</code> for each session that received frames, adds new targets to <code>targets.csv</code> (the previous version is kept in <code>_to_delete/</code>), brings the index links (<code>100-</code>…<code>103-</code>) and <code>ZZ_TARGET_INDEX.md</code> up to date, adds sibling-night lines to <code>.project_notes.txt</code> (never edits them), and notes borrowed flats in <code>.flats_are_copies</code>. Reads only the NAS; nothing on the device is touched.</p>
@@ -209,7 +209,25 @@
     </div>
   </section>
   <section class="step-panel" data-step="clean">
-    <div class="card"><div class="card-title">Clean up</div><p class="empty-hint">Arrives in phase 6: delete verified frames and their thumbnails from the ASIAIR, after your approval.</p></div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Clean up the device</div>
+        <div id="clean-status-badge" class="badge">loading</div>
+      </div>
+      <div id="clean-summary"></div>
+      <div id="clean-progress" class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
+      </div>
+      <div class="progress-wrap">
+        <button id="clean-verify-btn" class="ghost">Verify</button>
+        <button id="clean-run-btn" class="primary">Delete</button>
+      </div>
+      <div id="clean-guard"></div>
+      <div id="clean-result"></div>
+      <p class="hint">Deletes from the device only what you tick. Frames on the NAS are ticked once a checksum proves the NAS copy is identical: copied by this app, or checked by <strong>Verify</strong>, which reads each older frame from the device once. Everything else is called out and left unticked. Each <code>.fit</code> goes with its <code>_thn.jpg</code>. Right before deleting, the device is listed again (every file must be unchanged, and nothing written in the last 15 minutes) and each NAS copy is re-checked. Nothing on the NAS is touched.</p>
+    </div>
+    <div id="clean-groups"></div>
   </section>
 </main>
 
