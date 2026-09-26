@@ -221,8 +221,9 @@ class _Planner:
     def apply_exclusions(self, items: dict[str, PlanItem]) -> None:
         """Frames Chris opted out of on the Select step (answers "exclude:<src>" = "1") are never read."""
         for rel, it in items.items():
-            if it.action in (COPY, PENDING) and not it.retire and self.answers.get(f"exclude:{rel}") == "1":
-                it.action, it.dsts, it.reason = EXCLUDED, [], "excluded by you on the Select step"
+            if it.action in (COPY, PENDING) and self.answers.get(f"exclude:{rel}") == "1":
+                it.action, it.dsts, it.retire = EXCLUDED, [], []   # a left-out replacement retires nothing either
+                it.reason = "excluded by you on the Select step"
 
     def entry_item(self, e: SourceEntry, action: str, reason: str) -> PlanItem:
         it = PlanItem(e.rel, e.size, action, reason=reason)

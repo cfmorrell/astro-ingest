@@ -371,3 +371,14 @@ def test_excluding_keeps_decision_ids_stable(w):
     rel = next(i.src for i in first.items if i.src.endswith("_0001.fit"))
     second = w.plan({f"exclude:{rel}": "1"})
     assert [d.id for d in first.decisions] == [d.id for d in second.decisions]
+
+
+def test_a_replacement_can_be_left_out_too(w):
+    sadr = "SadrRegion-IC1318/2025-10-16-SadrRegion-2600MC-FMA135"
+    good = w.light("20251016-204000", obj="NGC 6888", folder="Autorun/Light/NGC 6888", FOCALLEN=137)
+    bad = w.nas / sadr / "lights" / good.name
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(good.read_bytes()[:3000])
+    rel = f"Autorun/Light/NGC 6888/{good.name}"
+    item = by_name(w.plan({f"exclude:{rel}": "1"}), good.name)[0]
+    assert (item.action, item.dsts, item.retire) == (P.EXCLUDED, [], [])
