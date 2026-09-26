@@ -193,6 +193,27 @@ def cmd_quality(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_find(args: argparse.Namespace) -> int:
+    """Find the ASIAIR on the network (read-only: a guest connect to the share, nothing listed or opened)."""
+    from astro_ingest.sources.discover import discover
+    cfg = load_config()
+    if cfg is None:
+        return 2
+    subnet = args.subnet or cfg.asiair_subnet
+    print(f"Looking for '{cfg.asiair_share}' on {subnet}" + (f" (trying {cfg.asiair_host} first)" if cfg.asiair_host else ""),
+          flush=True)
+    d = discover(subnet, cfg.asiair_share, hint=cfg.asiair_host)
+    print(f"Probed {d.scanned} host(s) in {d.seconds}s; SMB answered on: {', '.join(d.smb_hosts) or 'none'}")
+    for host, err in d.errors.items():
+        print(f"  {host}: share check failed ({err})")
+    if not d.found:
+        print("No ASIAIR found (is it powered on and on this network?)")
+        return 1
+    for host in d.found:
+        print(f"ASIAIR: {host}  (\\\\{host}\\{cfg.asiair_share})")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -223,6 +244,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("quality", help="score light frames against their groups and render thumbnails")
     p.add_argument("--source", help="local directory (default: $ASIAIR_ROOT)")
     p.set_defaults(func=cmd_quality)
+
+    p = sub.add_parser("find", help="find the ASIAIR on the network (read-only)")
+    p.add_argument("--subnet", help="network to search (default: $ASIAIR_SUBNET)")
+    p.set_defaults(func=cmd_find)
 
     p = sub.add_parser("serve", help="run the web app")
     p.add_argument("--host", default="0.0.0.0")
