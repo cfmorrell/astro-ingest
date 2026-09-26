@@ -1,0 +1,274 @@
+# Ported from astro-stacker (github.com/cfmorrell/astro-stacker) app/framestats.py at commit f31cbcb, so a frame
+# gets the same quality numbers and the same flag in both apps. Changes from the original: analyze_array() works on
+# already-loaded pixel data (one read of a frame feeds both scoring and its thumbnail, see core/imaging.load_fits),
+# analyze_frame() accepts a path or an open binary stream, stacker's project/night staging helpers are dropped, and
+# FrameStats gains from_dict(). Keep the detection and flagging math itself in step with stacker.
+"""Per-light-frame quality metrics via astropy + photutils.
+
+Replaces Siril for /lights/analyze (2026-09-2x). Why: Siril's calibrate+
+register writes a full ~300MB registered .fit per frame we never needed
+just for review numbers, and running multiple sequences in one Siril
+session has a severe, confirmed performance cliff — identical
+calibrate+register work took 10s alone vs 90s as the second sequence in
+one session (Siril doesn't cleanly release memory/thread state between
+sequence operations; see Handoff.md gotcha #8). This module is stateless
+numpy/astropy work per frame, called directly from Python — no
+subprocess, so that failure mode can't happen here, and it's faster
+besides (benchmarked against real capture data: ~0.3s/frame at 4x binning
+vs Siril's ~0.7-1s/frame even in Siril's *best* case, which still also
+writes a needless registered image).
+
+Operates directly on RAW, uncalibrated light frames — no masters needed,
+Siril never invoked. This is deliberately a fast quality *review* tool
+(FWHM/roundness/star-count/background/SNR for a human to eyeball, matching
+Chris's "recommend, don't auto-filter" requirement), not calibrated
+photometry. Trade-offs made for speed, fine for that purpose:
+- Block-mean binned (default 4x4) before detection/background — ~11x
+  faster than full resolution, benchmarked on a real 6248x4176 OSC frame.
+  For a Bayer/OSC sensor, a bin factor that's a multiple of 2 naturally
+  averages across each RGGB tile, acting as a rough luminance/debayer
+  step for free — no separate debayering needed. (Already-debayered
+  multi-layer input, e.g. a calibrated frame, is also handled below.)
+- No dark/bias subtraction: the reported background level includes the
+  uncorrected dark+bias offset. Fine for comparing frames *within one
+  session* (same camera/gain/temp, same offset on every frame), not a
+  true sky background. FWHM/roundness (star shape) are barely affected.
+- Defaults (bin_factor=4, threshold_sigma=8.0) validated 2026-09-2x
+  against real two-night data with known-bad frames (a twilight-ramp
+  session tail and an early elevated-background frame — see
+  flag_anomalies() below): produced a clean, well-separated signal
+  without further tuning. Worth revisiting once there's more than one
+  target's worth of data to check against.
+
+Star-detection API notes (photutils 3.0, confirmed empirically against
+real capture data, not just docs): IRAFStarFinder (not DAOStarFinder) is
+used because it returns `fwhm` and `roundness` directly per source in one
+pass — DAOStarFinder's table has no fwhm column. Its `roundness` is 0 for
+a round source and grows for elongated ones (unlike Siril's own
+convention, where 1.0 = round — these numbers are NOT directly comparable
+to Siril's, by design; see AnalyzeLightsRequest's docstring).
+"""
+
+from __future__ import annotations
+
+import warnings
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import BinaryIO, Optional
+
+import numpy as np
+from astropy.io import fits
+from astropy.stats import sigma_clipped_stats
+from photutils.detection import IRAFStarFinder
+from photutils.utils.exceptions import NoDetectionsWarning
+
+DEFAULT_BIN_FACTOR = 4
+DEFAULT_THRESHOLD_SIGMA = 8.0  # multiples of background std, above the median
+
+# Anomaly flagging (see flag_anomalies()): a robust z-score magnitude
+# above this, on ANY one metric, flags the frame. 3.0 is a conventional
+# "notably unusual" cutoff for a MAD-based robust z-score; picked to
+# clearly catch a real 7-frame twilight ramp in test data (z-scores in
+# the tens) without needing per-target tuning. Flagging errs toward
+# over-sensitive, not under: this recommends for human review, it
+# doesn't decide anything (see AnalyzeLightsRequest's docstring).
+ANOMALY_Z_THRESHOLD = 3.0
+# astro-ingest: frames flagged here are NOT ingested by default (stacker only recommends), so false alarms cost
+# data. Chris chose 4.0 after checking against his own hand-rejected frames (2026-09-25): at 4.0 all 17 dawn frames
+# he had dropped from Elephant Trunk 09-14 and Heart 09-15 were flagged, with 9 kept frames flagged too, versus
+# 24 at 3.0. The UI can still move it.
+INGEST_ANOMALY_Z_THRESHOLD = 4.0
+# "background"/"background_std" added after a REAL bug: 4 genuinely
+# all-zero (corrupt-capture) frames at the tail of a real session were
+# marked "recommended accept" instead of flagged. They were never checked
+# at all before this - only star_count/fwhm/roundness/snr were - and the
+# one thing that WAS supposed to catch "nothing here" (star_count == 0,
+# see flag_anomalies() below) turned out to depend on IRAFStarFinder
+# behaving predictably when handed a threshold of exactly 0 against
+# all-zero data, which isn't a case it's designed for. See analyze_frame()
+# below, which now short-circuits before ever reaching the star finder
+# for a zero-variance frame, AND these two metrics now also participate
+# in the normal per-night z-score comparison - either one alone would
+# have caught it (background=0 is wildly off a real bias+dark ADU offset;
+# background_std=0 is wildly off real read noise), together they cover a
+# frame that's degenerate but not perfectly, exactly zero too.
+_FLAGGABLE_METRICS = ("star_count", "fwhm", "roundness", "snr", "background", "background_std")
+
+
+@dataclass
+class FrameStats:
+    filename: str
+    fwhm: Optional[float]  # median FWHM across detected stars, in ORIGINAL-frame pixels
+    roundness: Optional[float]  # median roundness (0 = round, higher = more elongated)
+    star_count: int
+    background: float  # median background level, raw ADU (uncalibrated — see module docstring)
+    background_std: float
+    snr: Optional[float] = None  # median star flux / background_std — relative, not calibrated
+    captured_at: Optional[str] = None  # FITS DATE-OBS (UTC), for chronological display/sort
+    anomaly_z: dict = field(default_factory=dict)  # per-metric robust z-score vs. the rest of this night
+    flagged: bool = False  # True if any metric's |z| >= ANOMALY_Z_THRESHOLD — a recommendation, not a decision
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FrameStats":
+        return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
+
+
+def _bin_mean(a: np.ndarray, k: int) -> np.ndarray:
+    """Block-mean downsample by k in both axes (drops any remainder rows/cols)."""
+    if k <= 1:
+        return a
+    h, w = a.shape
+    h2, w2 = h - h % k, w - w % k
+    a = a[:h2, :w2]
+    return a.reshape(h2 // k, k, w2 // k, k).mean(axis=(1, 3))
+
+
+def analyze_frame(
+    path: Path | BinaryIO,
+    filename: str | None = None,
+    bin_factor: int = DEFAULT_BIN_FACTOR,
+    threshold_sigma: float = DEFAULT_THRESHOLD_SIGMA,
+) -> FrameStats:
+    """Compute quality-review stats for a single light frame (from a path or an open binary stream)."""
+    with fits.open(path, memmap=False) as hdul:
+        data = hdul[0].data
+        captured_at = hdul[0].header.get("DATE-OBS")
+    name = filename or (Path(path).name if isinstance(path, (str, Path)) else "frame")
+    return analyze_array(np.asarray(data, dtype=np.float32), name, captured_at, bin_factor, threshold_sigma)
+
+
+def analyze_array(
+    data: np.ndarray,
+    filename: str,
+    captured_at: Optional[str] = None,
+    bin_factor: int = DEFAULT_BIN_FACTOR,
+    threshold_sigma: float = DEFAULT_THRESHOLD_SIGMA,
+) -> FrameStats:
+    """analyze_frame() on pixel data that is already loaded."""
+    with warnings.catch_warnings():
+        # photutils warns (rather than returning quietly) when a frame has no usable stars, e.g. dawn frames
+        # that the flagging below exists to catch; the zero star_count already says so.
+        warnings.simplefilter("ignore", NoDetectionsWarning)
+        return _analyze_array(data, filename, captured_at, bin_factor, threshold_sigma)
+
+
+def _analyze_array(data, filename, captured_at, bin_factor, threshold_sigma) -> FrameStats:
+    if data.ndim == 3:
+        # Already-debayered multi-layer data (e.g. a calibrated frame) —
+        # green carries the most signal/detail for an RGGB OSC sensor.
+        data = data[1]
+
+    binned = _bin_mean(data, bin_factor)
+    _mean, median, std = sigma_clipped_stats(binned, sigma=3.0, maxiters=3)
+
+    # A frame with zero variance (every pixel identical - confirmed on
+    # real corrupt-capture data: all pixels literally 0) has no usable
+    # signal or noise to threshold against at all. IRAFStarFinder isn't
+    # designed for this case - a threshold of exactly `median + N*0`
+    # against already-zero-background data is undefined behavior, not
+    # guaranteed to cleanly report "0 stars found" the way a genuinely
+    # empty but noisy field would. Short-circuit here instead of handing
+    # it a degenerate threshold: star_count=0 is itself an unambiguous,
+    # unconditional flag (see flag_anomalies()), so this frame is
+    # guaranteed to be caught rather than depending on the star finder's
+    # unpredictable behavior on data it was never meant to see.
+    if std <= 0:
+        return FrameStats(
+            filename=filename,
+            fwhm=None,
+            roundness=None,
+            star_count=0,
+            background=float(median),
+            background_std=float(std),
+            snr=None,
+            captured_at=captured_at,
+        )
+
+    finder = IRAFStarFinder(
+        threshold=median + threshold_sigma * std,
+        fwhm=max(3.0 / bin_factor, 2.0),
+        sharpness_range=(0.3, 2.0),
+        roundness_range=(-1.0, 1.0),
+    )
+    sources = finder(binned - median)
+
+    if sources is None or len(sources) == 0:
+        return FrameStats(
+            filename=filename,
+            fwhm=None,
+            roundness=None,
+            star_count=0,
+            background=float(median),
+            background_std=float(std),
+            snr=None,
+            captured_at=captured_at,
+        )
+
+    snr = float(np.median(sources["flux"])) / float(std) if std > 0 else None
+    return FrameStats(
+        filename=filename,
+        # Scaled back up to original-frame pixels so the number means the
+        # same thing regardless of bin_factor.
+        fwhm=float(np.median(sources["fwhm"])) * bin_factor,
+        roundness=float(np.median(sources["roundness"])),
+        star_count=len(sources),
+        background=float(median),
+        background_std=float(std),
+        snr=snr,
+        captured_at=captured_at,
+    )
+
+
+def _robust_z_scores(values: list[float]) -> list[float]:
+    """Median-absolute-deviation-based z-scores: robust to the outliers
+    themselves skewing the baseline, unlike a plain mean/stdev z-score
+    (a handful of badly-off frames would otherwise inflate the stdev and
+    mask themselves). Returns all zeros if every value is identical.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    median = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - median)))
+    if mad == 0:
+        return [0.0] * len(values)
+    scaled_mad = mad * 1.4826  # normal-distribution consistency constant
+    return list(np.abs(arr - median) / scaled_mad)
+
+
+def flag_anomalies(frames: list[FrameStats], z_threshold: float = ANOMALY_Z_THRESHOLD) -> None:
+    """Flag frames whose metrics deviate unusually far from the REST OF
+    THIS NIGHT's own median — per Chris: "the key is looking for
+    anomalies in the data, not fixating on particular numbers as
+    cutoffs" — matching astropup-blink's per-metric outlier presentation
+    against a sequence's own distribution rather than a fixed absolute
+    threshold. Mutates each FrameStats' .anomaly_z/.flagged in place.
+
+    Call this once per night (frames from one imaging session) — mixing
+    nights with different sky conditions/exposure/gear into one baseline
+    would bury real within-night anomalies under between-night variation.
+
+    Validated against real data (2026-09-2x): correctly flagged all 7
+    frames of a genuine dawn-twilight ramp (background 635->8756 ADU,
+    star count 368->18, star_count/background/snr z-scores in the tens)
+    without any manual tuning.
+    """
+    if len(frames) < 3:
+        # Not enough frames for a meaningful "deviates from the rest"
+        # judgment; leave everything unflagged rather than guess.
+        for f in frames:
+            f.anomaly_z = {}
+            f.flagged = False
+        return
+
+    for metric in _FLAGGABLE_METRICS:
+        indices = [i for i, f in enumerate(frames) if getattr(f, metric) is not None]
+        if len(indices) < 3:
+            continue
+        z_scores = _robust_z_scores([getattr(frames[i], metric) for i in indices])
+        for idx, z in zip(indices, z_scores):
+            frames[idx].anomaly_z[metric] = round(float(z), 2)
+
+    for f in frames:
+        # Zero detections is its own unambiguous anomaly (nothing to
+        # compute a z-score against) — flag directly rather than putting
+        # a non-JSON-safe infinity in anomaly_z.
+        f.flagged = f.star_count == 0 or any(z >= z_threshold for z in f.anomaly_z.values())

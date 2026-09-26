@@ -1,0 +1,408 @@
+# Ported from astro-stacker (github.com/cfmorrell/astro-stacker) app/imaging.py at commit f31cbcb, for identical
+# previews in both apps (CLAUDE.md decision 12). Changes from the original are limited to: reading from a path OR an
+# open binary stream (so previews work through any capture Source), splitting the render into load_fits() +
+# render_array() so one read can feed both a thumbnail and frame-quality scoring (core/quality.py), and
+# stretch_for_kind(). Keep the stretch math itself in step with stacker.
+"""Renders a quick-look PNG preview from a FITS frame, for the frontend
+(app/static/) — both for reviewing raw lights during /lights/analyze and
+for eyeballing a finished result.fit. Not used anywhere in the actual
+calibration/stacking pipeline; purely a display convenience.
+
+Five stretch modes:
+- "none": percentile-clipped linear — no curve, closest to the raw data.
+- "linked": percentile + asinh stretch computed jointly across all
+  channels (one black/white point for R+G+B together) — preserves
+  relative color balance; the default.
+- "unlinked": percentile + asinh computed separately PER channel — can
+  correct color balance (each channel gets its own black/white point) at
+  the cost of it no longer reflecting the true relative color. Chris
+  asked for "none"/"linked"/"unlinked" on the final stack preview,
+  matching a common astro-processing choice.
+- "calibration": for master FLAT previews specifically, not a choice
+  exposed to Chris. A flat's real signal (vignetting) is only a ~5-10%
+  brightness variation, while dust motes are sharp outlier pixels
+  covering under ~0.5% of the frame - PercentileInterval+AsinhStretch
+  (tuned for the opposite problem: huge-dynamic-range light frames with
+  faint nebulosity against near-black sky) clips its black point right
+  at the motes' dark cores, crushing the entire smooth vignetting
+  gradient into the top of the visible range ("blown out, vignetting
+  barely visible, motes way too strong" - confirmed by rendering real
+  master flat data and comparing pixel histograms before choosing this
+  fix, not guessed at). ZScaleInterval (per channel, no curve at all) is
+  built for exactly this — robust to a small fraction of outlier pixels
+  while preserving midtone contrast — and visibly fixed it on real data.
+- "noise": for master BIAS/DARK previews specifically (also not a choice
+  exposed to Chris). A bias/dark frame is the opposite case from a flat:
+  no smooth gradient at all, just a near-uniform noise floor plus a
+  sparse handful of hot/cold pixel outliers - there IS no "sky
+  background" to display at a comfortable midtone the way ZScaleInterval
+  targets (confirmed on real master bias/dark data: ZScaleInterval maps
+  the median pixel to ~50% gray, a washed-out field, not the "mostly
+  solid dark field with a small handful of hot/cold pixels" Chris gets
+  from Siril's own unlinked autostretch on the same frames). "noise" mode
+  uses a midtones transfer function (MTF) autostretch instead - the same
+  algorithm PixInsight's ScreenTransferFunction and Siril's own "Auto
+  Stretch" use - which pushes the frame's OWN median down to a dark
+  target background (0.25) via a nonlinear curve, with anything below a
+  robust (MAD-based) shadow clip crushed to pure black. See _autostretch().
+Only "linked" vs "unlinked"/"calibration"/"noise" differ for multi-channel
+(calibrated/stacked) data; a raw single-plane Bayer sub has no channels
+to link or not.
+"""
+
+from __future__ import annotations
+
+import io
+from pathlib import Path
+from typing import BinaryIO
+
+import numpy as np
+from astropy.io import fits
+from astropy.visualization import AsinhStretch, PercentileInterval, ZScaleInterval
+from PIL import Image
+
+DEFAULT_MAX_SIZE = 1024
+DEFAULT_STRETCH = "linked"
+_STRETCH_MODES = ("none", "linked", "unlinked", "calibration", "noise")
+
+# (R, G1, B, G2) sample offsets within a 2x2 Bayer tile, keyed by the FITS
+# BAYERPAT convention (top-left pixel first, reading left-to-right).
+_BAYER_OFFSETS = {
+    # A real, previously-undiscovered bug lived here: B and G2 were
+    # transposed in every pattern (e.g. RGGB listed (1,0) as B and (1,1)
+    # as G2, but the actual RGGB tile - reading the name literally,
+    # row-major - is R(0,0) G(0,1) G(1,0) B(1,1), so (1,0) is a second G
+    # and (1,1) is B). _debayer_block_mean's "B" output was actually
+    # averaging real G with real B for its "G" channel and outputting
+    # pure G for "B" - a real, structural color error, not a stretch or
+    # rendering issue, present since debayering was first added. Caught
+    # while chasing an unrelated checkerboard artifact: comparing the
+    # demosaiced G channel against the raw mosaic's actual G1/G2 means
+    # (0.586 vs 0.587 - correctly close) showed the code's own internal
+    # G1/G2 split had a ~3x difference, which only makes sense if one of
+    # "G1"/"G2" was actually reading true B data. Confirmed against the
+    # positions by hand for all four patterns below.
+    "RGGB": ((0, 0), (0, 1), (1, 1), (1, 0)),
+    "BGGR": ((1, 1), (0, 1), (0, 0), (1, 0)),
+    "GRBG": ((0, 1), (0, 0), (1, 0), (1, 1)),
+    "GBRG": ((1, 0), (0, 0), (0, 1), (1, 1)),
+}
+
+
+def _convolve3x3(img: np.ndarray, kernel: np.ndarray) -> np.ndarray:
+    """3x3 convolution via shifted-slice addition — avoids adding scipy as
+    a dependency just for this.
+
+    A REAL, previously-undiscovered border artifact lived here: this is
+    called on a SPARSE per-channel array (real samples on a period-2
+    checkerboard, zeros everywhere else - see _debayer_bilinear()), and
+    `mode="edge"` padding just duplicates whatever value (real sample or
+    zero) happens to sit at the border, with NO regard for the
+    checkerboard's phase. Depending on which parity the border lands on,
+    that either duplicates a real R/B sample where a zero belongs (over-
+    weighting that channel right at the border) or duplicates a zero where
+    a real sample belongs (under-weighting it) - confirmed on a synthetic
+    uniform test image: the top-left corner came out with R spiking from
+    100 to 225 while B dropped from 200 to 50, and the bottom-right corner
+    did the reverse (R down to 25, B up to 450) - an exact match for what
+    Chris saw: "a red/orange left/top border and a blue right/bottom
+    border" on debayered previews. `mode="reflect"` (mirrors WITHOUT
+    repeating the edge value: pad[-1] = arr[1], not arr[0]) instead
+    correctly preserves the checkerboard's phase at any border or corner -
+    reflecting a period-2 pattern this way always lands back on the same
+    parity, so the padding is itself a plausible continuation of the real
+    Bayer pattern rather than a phase-blind copy. Re-ran the same
+    synthetic test after this fix: every border and corner pixel now
+    correctly comes out at the true uniform value (R=100, B=200
+    everywhere, no fringe at all).
+    """
+    h, w = img.shape
+    padded = np.pad(img, 1, mode="reflect")
+    out = np.zeros_like(img)
+    for ky in range(3):
+        for kx in range(3):
+            weight = kernel[ky, kx]
+            if weight:
+                out += weight * padded[ky : ky + h, kx : kx + w]
+    return out
+
+
+def _debayer_bilinear(mono: np.ndarray, pattern: str) -> np.ndarray:
+    """Full-resolution bilinear Bayer demosaic — each missing sample in a
+    channel is the (weighted) average of its nearest real neighbors of
+    that same channel, the standard approach for a Bayer CFA. Replaces an
+    earlier 2x2-block-average version that also halved resolution as a
+    side effect; this is real, if not the most sophisticated (AHD etc.
+    would do better at color-edge artifacts), demosaicing rather than a
+    quick-look approximation. R and B sit on a lattice sampled every
+    other row AND column, so each real sample's nearest same-channel
+    neighbors are its 4 diagonal corners (weight 1 each) plus the 2
+    orthogonal ones that fall on the same row/col of a DIFFERENT tile —
+    net kernel [[1,2,1],[2,4,2],[1,2,1]]/4, verified against real Bayer
+    tile positions. G sits on the other, denser checkerboard (every other
+    pixel counting both row and column together): a missing G's 4
+    orthogonal neighbors are always real G samples, kernel
+    [[0,1,0],[1,4,1],[0,1,0]]/4. Both kernels reduce to the identity at an
+    actual sample of that channel (verified: center weight 4, all other
+    in-window taps land on non-that-channel positions in the sparse
+    per-channel array, i.e. zero).
+    """
+    (ry, rx), (g1y, g1x), (by, bx), (g2y, g2x) = _BAYER_OFFSETS.get(pattern.upper(), _BAYER_OFFSETS["RGGB"])
+    h, w = mono.shape
+    mono = mono[: h - h % 2, : w - w % 2].astype(np.float32)
+    h, w = mono.shape
+
+    def sparse_channel(y0: int, x0: int) -> np.ndarray:
+        out = np.zeros((h, w), dtype=np.float32)
+        out[y0::2, x0::2] = mono[y0::2, x0::2]
+        return out
+
+    rb_kernel = np.array([[1, 2, 1], [2, 4, 2], [1, 2, 1]], dtype=np.float32) / 4.0
+    g_kernel = np.array([[0, 1, 0], [1, 4, 1], [0, 1, 0]], dtype=np.float32) / 4.0
+
+    r = _convolve3x3(sparse_channel(ry, rx), rb_kernel)
+    b = _convolve3x3(sparse_channel(by, bx), rb_kernel)
+    g_sparse = sparse_channel(g1y, g1x)
+    g_sparse[g2y::2, g2x::2] = mono[g2y::2, g2x::2]
+    g = _convolve3x3(g_sparse, g_kernel)
+    return np.stack([r, g, b], axis=-1)
+
+
+def _debayer_superpixel(mono: np.ndarray, pattern: str) -> np.ndarray:
+    """Half-resolution debayer: one RGB pixel per 2x2 Bayer tile (R, mean of the two G, B).
+
+    astro-ingest addition, used only when the output is being downsampled by >= 4 anyway (thumbnails): there,
+    bilinear-demosaic-then-block-average and superpixel-then-block-average agree to within a grey level or two
+    (tests/test_imaging.py checks this against the full path), at about a tenth of the time. Full-size previews
+    (the lightbox) still go through _debayer_bilinear, exactly as in astro-stacker.
+    """
+    (ry, rx), (g1y, g1x), (by, bx), (g2y, g2x) = _BAYER_OFFSETS.get(pattern.upper(), _BAYER_OFFSETS["RGGB"])
+    h, w = mono.shape
+    mono = mono[: h - h % 2, : w - w % 2]
+    r = mono[ry::2, rx::2]
+    g = (mono[g1y::2, g1x::2] + mono[g2y::2, g2x::2]) / 2.0
+    b = mono[by::2, bx::2]
+    return np.stack([r, g, b], axis=-1).astype(np.float32)
+
+
+def _block_average(arr: np.ndarray, stride: int) -> np.ndarray:
+    """Downsample by averaging each stride x stride block, not by picking
+    one pixel per block (rgb[::stride, ::stride]) - the latter has no
+    anti-aliasing and visibly artifacts on any image with fine per-pixel
+    structure. Works on both a 2D mono array and an (H, W, 3) RGB one.
+    """
+    if arr.ndim == 2:
+        h, w = arr.shape
+        h2, w2 = h - h % stride, w - w % stride
+        return arr[:h2, :w2].reshape(h2 // stride, stride, w2 // stride, stride).mean(axis=(1, 3))
+    h, w, c = arr.shape
+    h2, w2 = h - h % stride, w - w % stride
+    return arr[:h2, :w2, :].reshape(h2 // stride, stride, w2 // stride, stride, c).mean(axis=(1, 3))
+
+
+def _mtf(x: np.ndarray, m: float) -> np.ndarray:
+    """Midtones Transfer Function - maps 0->0, 1->1, and the midtone
+    parameter m itself to 0.5. Standard nonlinear autostretch curve;
+    PixInsight's ScreenTransferFunction and Siril's own "Auto Stretch"
+    use this identical formula - see _autostretch_params().
+    """
+    denom = (2.0 * m - 1.0) * x - m
+    denom = np.where(np.abs(denom) < 1e-12, 1e-12, denom)
+    return (m - 1.0) * x / denom
+
+
+def _autostretch_params(arr: np.ndarray, target_bkg: float = 0.25, shadow_clip: float = -2.8) -> tuple[float, float, float]:
+    """The (c0, c1, m) an MTF autostretch needs (see "noise" mode below):
+    a robust shadow-clip point (c0 - shadow_clip standard deviations,
+    measured via MAD so it's robust to the very outliers this is meant to
+    isolate, below the frame's own median), the frame's actual peak (c1),
+    and the midtone parameter m that maps the median itself to
+    target_bkg once normalized into [c0, c1] (see _mtf()). Same defaults
+    (0.25 background target, -2.8 shadow clipping) as PixInsight's
+    ScreenTransferFunction and Siril's own "Auto Stretch" - not guessed
+    at, and confirmed by hand against real master bias/dark pixel data
+    (this maps the median to the intended ~0.25, not the ~0.5
+    ZScaleInterval was putting it at) before choosing this.
+    """
+    median = float(np.median(arr))
+    mad = float(np.median(np.abs(arr - median)))
+    sigma = mad * 1.4826  # MAD -> Gaussian-equivalent standard deviation
+    c0 = median + shadow_clip * sigma  # shadow_clip is negative - c0 sits BELOW the median
+    c1 = float(arr.max())
+    if c1 <= c0:
+        return c0, c1, 0.5  # degenerate (perfectly flat) input - m unused, caller short-circuits
+    x_median = min(max((median - c0) / (c1 - c0), 0.0), 1.0)
+    if x_median <= 0.0 or x_median >= 1.0:
+        m = 0.5  # degenerate - nothing sensible to solve for; MTF(x, 0.5) is the identity
+    else:
+        y = target_bkg
+        m = x_median * (y - 1.0) / (2.0 * x_median * y - x_median - y)
+    return c0, c1, m
+
+
+def _apply_stretch(arr: np.ndarray, mode: str, limits=None) -> np.ndarray:
+    # `limits`, when given, is precomputed on the FULL-RESOLUTION data by
+    # the caller (render_preview_png()) - see its own comment for why
+    # these outlier-sensitive stats must never be recomputed on
+    # already-downsampled data.
+    if mode == "calibration":
+        lo, hi = limits if limits is not None else ZScaleInterval().get_limits(arr)
+        if hi <= lo:  # degenerate (perfectly flat) input - avoid a divide-by-zero
+            return np.zeros_like(arr)
+        return np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
+    if mode == "noise":
+        c0, c1, m = limits if limits is not None else _autostretch_params(arr)
+        if c1 <= c0:
+            return np.zeros_like(arr)
+        x = np.clip((arr - c0) / (c1 - c0), 0.0, 1.0)
+        return np.clip(_mtf(x, m), 0.0, 1.0)
+    interval = PercentileInterval(99.5)
+    if mode == "none":
+        return np.clip(interval(arr), 0.0, 1.0)
+    return np.clip(AsinhStretch(0.1)(interval(arr)), 0.0, 1.0)
+
+
+def load_fits(source: Path | BinaryIO) -> tuple[np.ndarray, fits.Header]:
+    """Pixel data (float32) and header of the primary HDU, from a path or an open binary stream."""
+    with fits.open(source, memmap=False) as hdul:
+        data = hdul[0].data
+        header = hdul[0].header.copy()
+    return np.asarray(data, dtype=np.float32), header
+
+
+def stretch_for_kind(kind: str | None) -> str:
+    """The stretch astro-stacker uses for each frame type: review lights 'unlinked' (raw subs have no white balance,
+    so a linked stretch is a flat cyan wash), master flats 'calibration', bias/dark 'noise'."""
+    return {"Flat": "calibration", "Dark": "noise", "Bias": "noise", "DarkFlat": "noise"}.get(kind or "", "unlinked")
+
+
+def render_preview_png(
+    path: Path | BinaryIO,
+    max_size: int = DEFAULT_MAX_SIZE,
+    stretch: str = DEFAULT_STRETCH,
+    debayer: bool = False,
+) -> bytes:
+    data, header = load_fits(path)
+    return render_array(data, header, max_size=max_size, stretch=stretch, debayer=debayer)
+
+
+def render_array(
+    data: np.ndarray,
+    header: fits.Header,
+    max_size: int = DEFAULT_MAX_SIZE,
+    stretch: str = DEFAULT_STRETCH,
+    debayer: bool = False,
+) -> bytes:
+    if stretch not in _STRETCH_MODES:
+        raise ValueError(f"unknown stretch mode {stretch!r}, expected one of {_STRETCH_MODES}")
+
+    if data.ndim == 3:
+        # Siril stores calibrated/stacked color data channels-first
+        # (3, H, W); PIL wants channels-last (H, W, 3).
+        rgb = np.moveaxis(data, 0, -1)
+        h, w = rgb.shape[:2]
+    elif debayer and max_size and -(-max(data.shape) // max_size) >= 4:
+        # astro-ingest: thumbnail fast path (see _debayer_superpixel)
+        pattern = str(header.get("BAYERPAT", "RGGB")).strip()
+        rgb = _debayer_superpixel(data, pattern)
+        h, w = rgb.shape[:2]
+    elif debayer:
+        # Raw OSC sub, and the caller knows this is a Bayer camera (see
+        # /projects/{name}/status's is_osc, set at staging time) — turn
+        # the mosaic into real (if half-resolution) color instead of
+        # grayscale noise. BAYERPAT is written by ASIAIR/typical capture
+        # software; RGGB is the overwhelmingly common default if absent.
+        pattern = str(header.get("BAYERPAT", "RGGB")).strip()
+        rgb = _debayer_bilinear(data, pattern)
+        h, w = rgb.shape[:2]
+    else:
+        # Raw OSC subs are single-plane Bayer mosaics — no color info to
+        # show without debayering, so just preview it as grayscale.
+        rgb = data
+        h, w = rgb.shape
+
+    # Both "calibration" (ZScaleInterval) and "noise" (_autostretch_params())
+    # are outlier-sensitive statistics — their computed black/white points
+    # depend on a small handful of extreme pixels (dust motes on a flat,
+    # hot/cold pixels on a bias/dark) surviving in the sample they're
+    # given. Computed on already-downsampled data (the old order — see the
+    # block-average comment below), a thumbnail's heavy stride smears each
+    # outlier's extreme value into its neighbors' average, diluting or
+    # erasing the very outliers these modes need to anchor a properly dark
+    # background — result: a thumbnail rendered noticeably brighter than
+    # the correctly-anchored full-resolution zoom of the exact same frame
+    # (confirmed the hard way — Chris: "the zoomed version looks right,
+    # but the thumbnail is way too bright"). Computed here, on the
+    # full-resolution data, BEFORE any downsampling, and reused unchanged
+    # below regardless of what size actually gets rendered — thumbnail and
+    # zoom now show the IDENTICAL stretch on the same frame, just at
+    # different pixel dimensions.
+    precomputed_limits = None
+    if stretch == "calibration":
+        precomputed_limits = (
+            [ZScaleInterval().get_limits(rgb[..., c]) for c in range(rgb.shape[-1])]
+            if rgb.ndim == 3
+            else ZScaleInterval().get_limits(rgb)
+        )
+    elif stretch == "noise":
+        precomputed_limits = (
+            [_autostretch_params(rgb[..., c]) for c in range(rgb.shape[-1])]
+            if rgb.ndim == 3
+            else _autostretch_params(rgb)
+        )
+
+    # Downsample BEFORE the percentile/stretch computation, not just via
+    # PIL's thumbnail() at the end — for a small review-grid thumbnail (a
+    # dozen of these load at once, see app/static/), that's the
+    # difference between running numpy stats over the full ~26M pixels vs
+    # roughly the ~1M we actually asked to see. Confirmed this mattered in
+    # practice: with 11 frame cards requesting full-resolution decodes,
+    # only ~7 finished loading within 8s in the browser; this is a real
+    # latency fix, not premature optimization. Fine for a quick-look
+    # preview (not photometry).
+    #
+    # Block-AVERAGE the stride factor, not naive strided picking
+    # (rgb[::stride, ::stride]): decimating without an anti-aliasing
+    # filter aliases any per-pixel-scale structure into visible artifacts
+    # at thumbnail size — confirmed the hard way once _debayer_bilinear
+    # replaced the old block-mean debayer (which had accidentally been
+    # doing this same averaging as a side effect of halving resolution).
+    # Symptoms were a checkerboard/moire pattern on master flat thumbnails
+    # (flats have strong fine-scale dust/vignetting texture) and a
+    # turquoise color cast on review light thumbnails (color-channel
+    # aliasing skewing the apparent average color). Reshaping into
+    # stride x stride blocks and averaging is the standard fix and isn't
+    # meaningfully slower than the naive version.
+    stride = max(1, -(-max(h, w) // max_size)) if max_size else 1
+    if stride > 1:
+        rgb = _block_average(rgb, stride)
+
+    if rgb.ndim == 3 and stretch in ("unlinked", "calibration", "noise"):
+        # Per-channel: each gets its own curve/black-white-point, computed
+        # independently instead of once across all channels jointly. For
+        # "unlinked" this passes "linked" into _apply_stretch() per
+        # channel — deliberately NOT "unlinked" again, since that mode
+        # only means anything at the multi-channel level handled right
+        # here; a single channel's own percentile+asinh math is identical
+        # either way. "calibration"/"noise" DO need to stay themselves
+        # here though, since those are genuinely different curves -
+        # collapsing either to "linked" would silently undo the fix.
+        per_channel_mode = "linked" if stretch == "unlinked" else stretch
+        normed = np.stack(
+            [
+                _apply_stretch(rgb[..., c], per_channel_mode, precomputed_limits[c] if precomputed_limits else None)
+                for c in range(rgb.shape[-1])
+            ],
+            axis=-1,
+        )
+    else:
+        normed = _apply_stretch(rgb, stretch, precomputed_limits)
+    img8 = (normed * 255).astype(np.uint8)
+
+    image = Image.fromarray(img8)
+    if image.width > max_size or image.height > max_size:
+        image.thumbnail((max_size, max_size))
+
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
