@@ -26,16 +26,24 @@ def _configure() -> None:
             _configured = True
 
 
+# "not there" as different SMB servers say it (Samba: OBJECT_NAME_NOT_FOUND; others: NO_SUCH_FILE, ...)
+_NOT_FOUND = {0xC0000034, 0xC000003A, 0xC000000F}
+
+
+def _not_found(e: OSError) -> bool:
+    return isinstance(e, FileNotFoundError) or (getattr(e, "ntstatus", None) or 0) & 0xFFFFFFFF in _NOT_FOUND
+
+
 class SmbSource:
-    def __init__(self, host: str, share: str, timeout: float = 15.0):
+    def __init__(self, host: str, share: str, timeout: float = 15.0, port: int = 445):
         import smbclient
         _configure()
-        self.host, self.share = host, share
+        self.host, self.share, self.port = host, share, port  # port: 445 on the ASIAIR; tests use a high port
         self.label = f"smb://{host}/{share}"
         self._root = rf"\\{host}\{share}"
         self._cache: dict = {}  # this source's own connection cache
         smbclient.register_session(host, username="guest", password="", auth_protocol="ntlm", require_signing=False,
-                                   connection_timeout=timeout, connection_cache=self._cache)
+                                   connection_timeout=timeout, connection_cache=self._cache, port=port)
 
     def _path(self, rel: str) -> str:
         parts = [p for p in rel.split("/") if p]
@@ -48,7 +56,7 @@ class SmbSource:
         stack = [""]
         while stack:
             rel_dir = stack.pop()
-            entries = sorted(smbclient.scandir(self._path(rel_dir), connection_cache=self._cache),
+            entries = sorted(smbclient.scandir(self._path(rel_dir), connection_cache=self._cache, port=self.port),
                              key=lambda e: e.name)
             subdirs = []
             for e in entries:
@@ -60,39 +68,44 @@ class SmbSource:
                 if e.is_dir():
                     subdirs.append(rel)
                 elif e.is_file():
-                    st = e.stat()
+                    st = smbclient.lstat(e.path, connection_cache=self._cache, port=self.port)  # = e.stat(), on our port
                     yield SourceEntry(rel, st.st_size, st.st_mtime)
             stack.extend(reversed(subdirs))  # depth-first in name order, like LocalDirSource
 
     def open_read(self, rel: str) -> BinaryIO:
         import smbclient
         # share_access "rw": never lock a file the device itself might be writing or reading
-        return smbclient.open_file(self._path(rel), mode="rb", share_access="rw", connection_cache=self._cache)
+        return smbclient.open_file(self._path(rel), mode="rb", share_access="rw", connection_cache=self._cache,
+                                   port=self.port)
 
     def stat(self, rel: str) -> SourceEntry | None:
         import smbclient
         try:
-            st = smbclient.stat(self._path(rel), connection_cache=self._cache)
-        except FileNotFoundError:
-            return None
+            st = smbclient.stat(self._path(rel), connection_cache=self._cache, port=self.port)
+        except OSError as e:
+            if _not_found(e):
+                return None
+            raise
         return SourceEntry(rel, st.st_size, st.st_mtime)
 
     def delete(self, rel: str) -> None:
         import smbclient
         check_deletable(rel)
-        smbclient.remove(self._path(rel), connection_cache=self._cache)
+        smbclient.remove(self._path(rel), connection_cache=self._cache, port=self.port)
 
     def rmdir(self, rel: str) -> None:
         import smbclient
         check_removable_dir(rel)
-        smbclient.rmdir(self._path(rel), connection_cache=self._cache)
+        smbclient.rmdir(self._path(rel), connection_cache=self._cache, port=self.port)
 
     def listdir(self, rel: str) -> list[str]:
         import smbclient
         try:
-            return sorted(smbclient.listdir(self._path(rel), connection_cache=self._cache))
-        except FileNotFoundError:
-            return []
+            return sorted(smbclient.listdir(self._path(rel), connection_cache=self._cache, port=self.port))
+        except OSError as e:
+            if _not_found(e):
+                return []
+            raise
 
     def close(self) -> None:
         import smbclient

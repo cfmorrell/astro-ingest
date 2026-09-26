@@ -20,6 +20,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+.venv-smbtest/
 .pytest_cache/
 build/
 dist/
