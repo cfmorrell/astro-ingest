@@ -24,13 +24,33 @@ class SourceUnavailable(Exception):
 
 
 def open_source(cfg: Config, override: str | Path | None = None) -> Source:
-    """The capture source: a local directory (ASIAIR_ROOT or --source). SMB arrives in phase 3."""
+    """The capture source.
+
+    - `override` "smb" -> the remembered device over SMB; "smb://host/share" -> that share; anything else -> a local
+      directory.
+    - No override: ASIAIR_ROOT (a local directory, e.g. the dev sample) if set, else the remembered device over SMB.
+    """
+    override = str(override) if override else None
+    if override and override.startswith("smb://"):
+        host, _, share = override[len("smb://"):].partition("/")
+        return _smb(host, share or cfg.asiair_share)
+    if override == "smb" or (override is None and cfg.asiair_root is None):
+        device = remembered_device(cfg)
+        if not device:
+            raise SourceUnavailable("no capture device picked yet: run `astro-ingest find`")
+        return _smb(device["host"], device["share"])
     root = Path(override) if override else cfg.asiair_root
-    if root is None:
-        raise SourceUnavailable("no ASIAIR_ROOT set (direct SMB to the ASIAIR arrives in phase 3)")
     if not root.is_dir():
         raise SourceUnavailable(f"source {root} is not reachable")
     return LocalDirSource(root)
+
+
+def _smb(host: str, share: str) -> Source:
+    from astro_ingest.sources.smb import SmbSource
+    try:
+        return SmbSource(host, share)
+    except Exception as exc:  # offline, refused, ...
+        raise SourceUnavailable(f"can't reach smb://{host}/{share}: {type(exc).__name__}: {exc}") from exc
 
 
 def nas_index(cfg: Config) -> NasIndex:

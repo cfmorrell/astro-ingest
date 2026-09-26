@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections import Counter, defaultdict
-from zoneinfo import ZoneInfo
 
 from astro_ingest.config import VERSION, Config, ConfigError
 from astro_ingest.core import planner as P
 from astro_ingest.core.scan import Scan, scan
-from astro_ingest.sources.local import LocalDirSource
 
 
 def _gb(n: int) -> str:
@@ -70,17 +67,21 @@ def print_scan(result: Scan, out=sys.stdout) -> None:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    root = args.source or os.environ.get("ASIAIR_ROOT")
-    if not root:
-        print("scan: give --source DIR or set ASIAIR_ROOT (SMB sources arrive in phase 3)", file=sys.stderr)
+    from astro_ingest.service import SourceUnavailable, open_source
+    cfg = load_config()
+    if cfg is None:
         return 2
-    tz = ZoneInfo(os.environ.get("TZ") or "America/New_York")
+    try:
+        source = open_source(cfg, args.source)
+    except SourceUnavailable as e:
+        print(f"scan: {e}", file=sys.stderr)
+        return 2
 
     def progress(done: int, total: int) -> None:
         if sys.stderr.isatty() and (done % 50 == 0 or done == total):
             print(f"\rreading headers {done}/{total}", end="" if done < total else "\n", file=sys.stderr)
 
-    print_scan(scan(LocalDirSource(root), tz, read_headers=not args.no_headers, progress=progress))
+    print_scan(scan(source, cfg.tz, read_headers=not args.no_headers, progress=progress))
     return 0
 
 
@@ -254,7 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("scan", help="inventory a capture source (read-only)")
-    p.add_argument("--source", help="local directory to scan (default: $ASIAIR_ROOT)")
+    p.add_argument("--source", help="local directory, 'smb' (the picked device) or smb://host/share "
+                                    "(default: $ASIAIR_ROOT, else the picked device)")
     p.add_argument("--no-headers", action="store_true", help="filenames only; don't open any frame")
     p.set_defaults(func=cmd_scan)
 

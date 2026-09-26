@@ -193,6 +193,11 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    again. If SMB from the ASIAIR proves too slow (measure in phase 3), re-sequence: copy whole groups first, score on
    the NAS, then **retire** excluded frames to the session's `_to_delete/` (never delete on the NAS) and let cleanup
    remove them from the ASIAIR as usual. Decide after seeing real throughput.
+   *Measured 2026-09-25 (phase 3):* SMB reads from the ASIAIR run at **~10.6 MB/s** (4.9 s per 52 MB frame; two
+   parallel reads don't help: the link is the limit). Listing the share takes 20 s, a header scan 39 s. For the
+   sample, copying the 559 new files (~29 GB) is ~46 min; scoring first and then copying reads new frames twice
+   (~1 h 50 min). Option for phase 4 (to decide): **read each new frame once into a local staging area**
+   (checksummed on the way in), score and file from there; rejected frames never enter the Astronomy share.
 3. **ASIAIR discovery and SmbSource (read-only against the real device).** Build `discover.py` and `smb.py`, plus the
    dashboard status and Find button. Test with a fake network in unit tests. Against the live ASIAIR, only list and
    read. Check SMB throughput and reconnect behavior.
