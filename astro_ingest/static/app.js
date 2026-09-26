@@ -962,6 +962,7 @@ document.getElementById("rescan-btn").addEventListener("click", async (e) => {
   await loadPlan(true);
   e.target.disabled = false;
 });
+document.getElementById("connect-next-btn").addEventListener("click", () => { state.activeStep = "scan"; showActiveStep(); });
 document.getElementById("select-next-btn").addEventListener("click", () => { state.activeStep = "stage"; showActiveStep(); });
 document.getElementById("stage-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
