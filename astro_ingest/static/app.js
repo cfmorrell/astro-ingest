@@ -92,6 +92,7 @@ function formatCaptured(iso) {
 }
 
 function gb(bytes) {
+  if (!bytes) return "0 B";
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
   if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
@@ -149,7 +150,8 @@ function isFlagged(item) {
 }
 
 function isKept(item) {
-  return isFlagged(item) && item.action !== "rejected";
+  // flagged, but you chose to ingest it anyway (frames already on the NAS were never a choice)
+  return isFlagged(item) && (item.action === "copy" || item.action === "append");
 }
 
 function frameStatsLine(item) {

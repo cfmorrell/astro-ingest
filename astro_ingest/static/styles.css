@@ -1333,8 +1333,14 @@ button.danger-outline:hover {
 
 .frame-card .frame-actions {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 6px;
   margin-top: 6px;
+}
+
+.frame-card .frame-actions button {
+  white-space: nowrap;
 }
 
 .quality-toolbar {
@@ -1343,4 +1349,12 @@ button.danger-outline:hover {
   align-items: center;
   flex-wrap: wrap;
   margin: 6px 0 8px;
+}
+
+/* the stats caption sits over the (full-width) image; give it a backing so it stays legible */
+.lightbox-caption {
+  background: rgba(0, 0, 0, 0.75);
+  border-radius: 6px;
+  padding: 6px 12px;
+  color: var(--text);
 }
