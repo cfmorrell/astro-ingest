@@ -77,6 +77,9 @@ git remote add origin git@github.com:cfmorrell/astro-ingest.git
 git push -u origin main
 ```
 
+The staging share `/mnt/user/astro-ingest-staging` (created in UnRAID → Shares) is mounted at `/staging` by
+`dev/run-dev.sh`, which also sets `STAGING_DIR=/staging`.
+
 Python dependencies go in a virtualenv inside the repo (git-ignored, persisted with `/workspace`):
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'

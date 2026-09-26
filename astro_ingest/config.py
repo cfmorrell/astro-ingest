@@ -73,8 +73,8 @@ class Config:
             asiair_share=optional("ASIAIR_SHARE") or "EMMC Images",
             asiair_host=optional("ASIAIR_HOST"),
             cache_dir=Path(optional("CACHE_DIR") or state_dir / "cache"),
-            # Chris: staging belongs on its own share (e.g. /mnt/user/astro-staging mounted at /staging). The default
-            # keeps dev working inside the sandbox; "_" never matches a target folder.
+            # Chris: staging is its own share (/mnt/user/astro-ingest-staging, mounted at /staging). The fallback keeps
+            # things working without it; "_" never matches a target folder.
             staging_dir=Path(optional("STAGING_DIR") or Path(env["ASTRO_ROOT"].strip()) / "_staging"),
             assumed_wifi_mb_s=_positive_float(optional("ASSUMED_WIFI_MB_S"), 10.0),
         )

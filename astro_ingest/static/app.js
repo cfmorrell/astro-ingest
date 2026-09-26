@@ -4,8 +4,8 @@
  * collapsing) follows astro-stacker's static/app.js at commit f31cbcb.
  */
 
-const STEPS = ["connect", "scan", "select", "stage", "review", "copy", "file", "clean"];
-const STEP_LABELS = { connect: "Connect", scan: "Scan", select: "Select", stage: "Stage", review: "Review", copy: "Copy & verify", file: "File", clean: "Clean up" };
+const STEPS = ["connect", "scan", "stage", "review", "copy", "file", "clean"];
+const STEP_LABELS = { connect: "Connect", scan: "Scan", stage: "Stage", review: "Review", copy: "Copy & verify", file: "File", clean: "Clean up" };
 const STEP_PHASE = { copy: "4b", file: "5", clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
 const LARGE_GROUP_THRESHOLD = 20;  // beyond this, collapse to flagged frames +/- 2 neighbours (as astro-stacker)
 const SMALL_GROUP_PEERS = 10;      // fewer frames than this to compare against: scoring is less reliable (M42 04-11)
@@ -411,7 +411,6 @@ function stepStatus(step) {
   switch (step) {
     case "connect": return { available: true, complete: !!(state.health && state.health.source_online) };
     case "scan": return { available: true, complete: planned };
-    case "select": return { available: planned, complete: planned && selectedItems().length > 0 };
     case "stage": return { available: planned, complete: planned && selectedItems().length > 0 && selectedItems().every((i) => i.staged) };
     case "review": return { available: planned, complete: planned && state.plan.summary.decisions_open === 0 };
     default: return { available: false, complete: false };
@@ -540,7 +539,7 @@ function renderScan() {
   body.appendChild(row);
 }
 
-// ---------- select: which frames to read from the device ----------
+// ---------- scan, part 2: choose which frames to read from the device ----------
 
 function captureStamp(src) {
   // "…_20260915-052048_…" -> "20260915-052048" (sorts chronologically; ASIAIR names carry local time)
@@ -963,7 +962,6 @@ document.getElementById("rescan-btn").addEventListener("click", async (e) => {
   await loadPlan(true);
   e.target.disabled = false;
 });
-document.getElementById("scan-next-btn").addEventListener("click", () => { state.activeStep = "select"; showActiveStep(); });
 document.getElementById("select-next-btn").addEventListener("click", () => { state.activeStep = "stage"; showActiveStep(); });
 document.getElementById("stage-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
 document.getElementById("stage-run-btn").addEventListener("click", runStage);

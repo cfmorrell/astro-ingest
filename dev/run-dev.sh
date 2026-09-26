@@ -15,8 +15,8 @@ docker run -d --name ${NAME} --restart unless-stopped \
   -v "$BASE/home":/home/dev \
   -v /mnt/user/Astronomy:/astro:ro \
   -v /mnt/user/astro-sandbox:/astro-sandbox \
-  `# staging share (Chris, 2026-09-25); until it exists, STAGING_DIR defaults to /astro-sandbox/_staging:` \
-  `# -v /mnt/user/astro-staging:/staging` \
+  -v /mnt/user/astro-ingest-staging:/staging \
+  -e STAGING_DIR=/staging \
   -v /mnt/remotes/ASIAIR:/asiair:ro,rslave \
   -p 8090:8000 \
   ${NAME}

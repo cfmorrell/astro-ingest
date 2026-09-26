@@ -63,8 +63,8 @@ so tell Chris.
     not used for display. `core/imaging.py` and `core/quality.py` are ports of stacker's `app/imaging.py` and
     `app/framestats.py` (commit f31cbcb): keep them in step with stacker.
 19. **Select → Stage (phase 4a).** Reads over the ASIAIR's Wi-Fi run ~9–10 MB/s (it stays on Wi-Fi), so each new
-    frame is **read from the device exactly once**, into `STAGING_DIR` (a separate UnRAID share in production,
-    outside the Astronomy share; dev default `$ASTRO_ROOT/_staging`), checksummed (BLAKE2b) on the way in and
+    frame is **read from the device exactly once**, into `STAGING_DIR` (its own UnRAID share,
+    `/mnt/user/astro-ingest-staging` mounted at `/staging`, outside the Astronomy share), checksummed (BLAKE2b) on the way in and
     re-verified on disk; scoring, previews and filing work from the staged copy (`staging.StagedSource`).
     Before that, the **Select step** shows a plain chronological grid (left→right, top→bottom) of the device's own
     thumbnails per set; Chris can leave out frames or whole sets, with a live rough Wi-Fi time estimate
@@ -83,6 +83,7 @@ We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ing
 | `/astro-sandbox` | `/mnt/user/astro-sandbox` | rw | test copy of part of the share. **All dev writes go here** |
 | `/asiair` | `/mnt/remotes/ASIAIR` | read-only | ASIAIR SMB share (may be offline; the app must cope) |
 | `/home/dev` | `/mnt/user/docker_appdata/astro-ingest-dev/home` | rw | persisted home (Claude Code, ssh keys, git config) |
+| `/staging` | `/mnt/user/astro-ingest-staging` | rw | `STAGING_DIR`: frames read once from the device, until filed |
 
 Web port: container `8000` → host `8090`. Config comes from env vars (see `.env.example`; `dev/run-dev.sh` passes
 the repo's `.env`): `ASTRO_ROOT` (write target), `ASTRO_NAS` (old name `ASTRO_ARCHIVE` still accepted), `STATE_DIR`, `TZ`, `ASIAIR_ROOT`, `ASIAIR_SUBNET`,
