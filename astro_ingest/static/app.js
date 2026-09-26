@@ -36,7 +36,7 @@ const CLEANUP_LABELS = {
 };
 
 const state = {
-  activeStep: "review",
+  activeStep: "connect",  // the flow starts at the beginning and works left to right across the stepper
   health: null,
   devices: null,         // /api/devices: source mode, remembered device, last search
   plan: null,
@@ -965,7 +965,7 @@ document.getElementById("rescan-btn").addEventListener("click", async (e) => {
 document.getElementById("select-next-btn").addEventListener("click", () => { state.activeStep = "stage"; showActiveStep(); });
 document.getElementById("stage-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
-document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "review"; showActiveStep(); });
+document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
 document.getElementById("find-btn").addEventListener("click", () => findDevices(false));
 document.getElementById("find-all-btn").addEventListener("click", () => findDevices(true));
