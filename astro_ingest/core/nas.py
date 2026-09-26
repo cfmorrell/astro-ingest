@@ -40,6 +40,7 @@ class Session:
     has_flats: bool = False
     light_angles: set[int] = field(default_factory=set)
     light_count: int = 0
+    flat_files: list[NasFile] = field(default_factory=list)   # frames under flats*/ (for borrowing, §7.4)
 
     @property
     def rel(self) -> str:
@@ -80,9 +81,11 @@ def merge(*indexes: NasIndex) -> NasIndex:
                 existing.has_flats |= s.has_flats
                 existing.light_angles |= s.light_angles
                 existing.light_count = max(existing.light_count, s.light_count)
+                have = {f.rel for f in existing.flat_files}
+                existing.flat_files.extend(f for f in s.flat_files if f.rel not in have)
             else:
                 sessions[s.rel] = Session(s.target_folder, s.folder, s.parsed, s.has_flats, set(s.light_angles),
-                                          s.light_count)
+                                          s.light_count, list(s.flat_files))
         for t in index.target_folders:
             if t not in merged.target_folders:
                 merged.target_folders.append(t)
@@ -97,7 +100,7 @@ def _entries(path: Path) -> list[os.DirEntry]:
 
 
 def _walk_files(root: Path, start: Path, index: NasIndex, on_file=None) -> None:
-    """Record every frame file under `start` (no symlinks, no _to_delete); call on_file(dir_rel_parts, name)."""
+    """Record every frame file under `start` (no symlinks, no _to_delete); call on_file(dir_rel_parts, NasFile)."""
     stack = [start]
     while stack:
         d = stack.pop()
@@ -109,9 +112,10 @@ def _walk_files(root: Path, start: Path, index: NasIndex, on_file=None) -> None:
                     stack.append(Path(e.path))
             elif e.is_file() and FRAME_FILE.search(e.name):
                 rel = Path(e.path).relative_to(root).as_posix()
-                index.files[e.name].append(NasFile(rel, e.stat().st_size))
+                nf = NasFile(rel, e.stat().st_size)
+                index.files[e.name].append(nf)
                 if on_file:
-                    on_file(Path(e.path).parent.relative_to(start).parts, e.name)
+                    on_file(Path(e.path).parent.relative_to(start).parts, nf)
 
 
 def build_index(root: str | Path) -> NasIndex:
@@ -134,13 +138,14 @@ def _index_target(root: Path, target: Path, index: NasIndex) -> None:
             continue
         session = Session(target.name, e.name, rules.parse_session_name(e.name))
 
-        def on_file(parts: tuple[str, ...], name: str, s: Session = session) -> None:
+        def on_file(parts: tuple[str, ...], nf: NasFile, s: Session = session) -> None:
             sub = parts[0].lower() if parts else ""
             if sub.startswith("flats"):
                 s.has_flats = True
+                s.flat_files.append(nf)
             elif sub.startswith("lights"):
                 s.light_count += 1
-                fn = asiair.parse_name(name)
+                fn = asiair.parse_name(nf.rel.rsplit("/", 1)[-1])
                 if fn and fn.angle is not None:
                     s.light_angles.add(fn.angle)
 
@@ -162,6 +167,8 @@ class CalibrationSet:
     offset: str | None
     temp_c: float | None      # mean CCD-TEMP of the first and last frames
     date: dt.date | None      # from the folder name (local date the set started)
+    first_temp_c: float | None = None  # CCD-TEMP of the first frame (what PROJECT_INFO has always shown)
+    obs_date: dt.date | None = None    # earliest DATE-OBS date of the first/last frame (projinfo.build_index's date)
 
 
 _DATE_FOLDER = re.compile(r"^(\d{4}-\d{2}-\d{2})")
@@ -191,6 +198,7 @@ def calibration_library(root: str | Path) -> list[CalibrationSet]:
                 continue
             temps = [t for t in (num(first(h, "CCD-TEMP")) for h in (h0, h1)) if t is not None]
             m = _DATE_FOLDER.match(os.path.basename(dirpath))
+            obs = [d for d in (_obs_date(first(h, "DATE-OBS", "DATE-LOC")) for h in (h0, h1)) if d]
             sets.append(CalibrationSet(
                 kind=kind,
                 rel=Path(dirpath).relative_to(root).as_posix(),
@@ -201,5 +209,16 @@ def calibration_library(root: str | Path) -> list[CalibrationSet]:
                 offset=first(h0, "OFFSET"),
                 temp_c=sum(temps) / len(temps) if temps else None,
                 date=dt.date.fromisoformat(m.group(1)) if m else None,
+                first_temp_c=num(first(h0, "CCD-TEMP")),
+                obs_date=min(obs) if obs else None,
             ))
     return sets
+
+
+def _obs_date(value: str | None) -> dt.date | None:
+    if not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(value[:19]).date()
+    except ValueError:
+        return None

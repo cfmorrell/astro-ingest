@@ -60,6 +60,8 @@ def connect(cfg: Config):
     try:
         con.execute("PRAGMA journal_mode=DELETE")
         con.executescript(SCHEMA)
+        if "catalogued_at" not in {r["name"] for r in con.execute("PRAGMA table_info(batches)")}:
+            con.execute("ALTER TABLE batches ADD COLUMN catalogued_at REAL")   # phase 5: Catalog done for this batch
         yield con
         con.commit()
     finally:
@@ -69,8 +71,8 @@ def connect(cfg: Config):
 def create_batch(cfg: Config, batch_id: str, source: str, ops: list[dict], summary: dict) -> None:
     now = time.time()
     with connect(cfg) as con:
-        con.execute("INSERT INTO batches VALUES (?, ?, ?, NULL, 'approved', ?, ?)",
-                    (batch_id, now, now, source, json.dumps(summary)))
+        con.execute("INSERT INTO batches (id, created_at, approved_at, status, source, summary_json) "
+                    "VALUES (?, ?, ?, 'approved', ?, ?)", (batch_id, now, now, source, json.dumps(summary)))
         con.executemany(
             "INSERT INTO operations (batch_id, seq, kind, src, staged, dst, size, blake2b, status) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
@@ -125,3 +127,16 @@ def unfinished_batch(cfg: Config) -> str | None:
         r = con.execute("SELECT id FROM batches WHERE status IN ('approved','running') "
                         "ORDER BY created_at DESC LIMIT 1").fetchone()
     return r["id"] if r else None
+
+
+def uncatalogued_batches(cfg: Config) -> list[dict]:
+    """Finished copy batches whose Catalog step hasn't run yet, oldest first."""
+    with connect(cfg) as con:
+        ids = [r["id"] for r in con.execute(
+            "SELECT id FROM batches WHERE status = 'done' AND catalogued_at IS NULL ORDER BY created_at")]
+    return [batch(cfg, i) | {"operations": operations(cfg, i)} for i in ids]
+
+
+def mark_catalogued(cfg: Config, batch_ids: list[str]) -> None:
+    with connect(cfg) as con:
+        con.executemany("UPDATE batches SET catalogued_at = ? WHERE id = ?", [(time.time(), b) for b in batch_ids])

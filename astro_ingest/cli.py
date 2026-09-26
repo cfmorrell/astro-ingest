@@ -321,6 +321,34 @@ def cmd_copy(args: argparse.Namespace) -> int:
     return 0 if not result["failed"] and not result["count_problems"] else 1
 
 
+def cmd_catalog(args: argparse.Namespace) -> int:
+    """Show what Catalog would write after Copy & verify; with --yes, write it."""
+    from astro_ingest import catalog
+    cfg = load_config()
+    if cfg is None:
+        return 2
+    pv = catalog.preview(cfg)
+    sm = pv.summary()
+    print(f"Catalog for {len(sm['batches'])} copy batch(es), {sm['sessions']} session(s): {sm['writes']} write(s)")
+    for c in pv.changes:
+        if c.status != "unchanged":
+            print(f"  {c.status:7s} {c.kind:13s} {c.path}{' -> ' + c.target if c.target else ''}"
+                  f"{'  (' + c.why + ')' if c.why else ''}")
+    for g in pv.gaps:
+        print(f"  calibration gap: {g['session']}: {g['kind']} {g['camera']} {g['exposure']}s gain {g['gain']} "
+              f"offset {g['offset']}: {g['problem']}")
+    for line in pv.log_lines:
+        print(f"  decision log: {line}")
+    if not args.yes or not sm["writes"]:
+        print("Nothing written. Run again with --yes to write." if sm["writes"] else "Nothing to write.")
+        if args.yes and pv.batches:
+            catalog.run(cfg, pv)   # marks the batches catalogued
+        return 0
+    result = catalog.run(cfg, pv)
+    print(result)
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -369,6 +397,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--source", help="local directory, 'smb' or smb://host/share (default: as configured)")
     p.add_argument("--yes", action="store_true", help="approve and run (without it, only show what would happen)")
     p.set_defaults(func=cmd_copy)
+
+    p = sub.add_parser("catalog", help="after copying: PROJECT_INFO, targets.csv, index links, notes")
+    p.add_argument("--yes", action="store_true", help="write the changes (default: only show them)")
+    p.set_defaults(func=cmd_catalog)
 
     p = sub.add_parser("serve", help="run the web app")
     p.add_argument("--host", default="0.0.0.0")

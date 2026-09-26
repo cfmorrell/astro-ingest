@@ -392,3 +392,57 @@ def test_decision_titles_name_the_problem(w):
     titles = {d.kind: d.title for d in w.plan().decisions}
     assert titles == {"release": "Unmatched flats", "tiny-group": "Very few frames", "target": "Unknown target"}
     assert all(len(d.question) < 140 and "/" not in d.question for d in w.plan().decisions)   # brief, no paths
+
+
+# ---------------------------------------------------------------- cross-night flats (§7.4)
+
+SOUL_20 = "SoulNebula-IC1848/2026-09-20-SoulNebula-2600MC-Z61"
+
+
+def _two_nights(w, first_angle=91, flat_angle=91, second="20260923"):
+    for i in range(4):
+        w.light(f"20260920-22{i}000", angle=first_angle, seq=i + 1)
+        w.light(f"{second}-22{i}000", angle=271, seq=i + 5)                 # 271 = 91 after a meridian flip
+    return [w.flat(f"{second[:-2]}{int(second[-2:]) + 1:02d}-06330{i}", angle=flat_angle, seq=i + 1) for i in range(3)]
+
+
+def test_borrowing_flats_is_offered_but_not_by_default(w):
+    _two_nights(w)
+    plan = w.plan()
+    d = decision(plan, "borrow-flats")
+    assert (d.title, d.default, d.resolved) == ("No flats", "none", "none") and d.items == []
+    assert [o["value"] for o in d.options][0] == "none" and len(d.options) == 2
+    flats = by_name(plan, "Flat_")
+    assert all(len(f.dsts) == 1 and "2026-09-23" in f.dsts[0] for f in flats) and plan.borrowed == []
+    s20 = next(s for s in plan.sessions if s.rel == SOUL_20)
+    assert "no flats found for these lights" in s20.warnings
+
+    plan = w.plan({d.id: d.options[1]["value"]})
+    flats = by_name(plan, "Flat_")
+    assert all(sorted(x.split("/")[1][:10] for x in f.dsts) == ["2026-09-20", "2026-09-23"] for f in flats)
+    assert [b["session"] for b in plan.borrowed] == [SOUL_20] and len(plan.borrowed[0]["files"]) == 3
+    s20 = next(s for s in plan.sessions if s.rel == SOUL_20)
+    assert s20.flats == 3 and "no flats found for these lights" not in s20.warnings
+
+
+@pytest.mark.parametrize("kw", [{"first_angle": 120}, {"flat_angle": 79},
+                                {"second": "20260929"}])
+def test_no_borrowing_without_matching_rotation_or_within_a_week(w, kw):
+    _two_nights(w, **kw)
+    assert not [d for d in w.plan().decisions if d.kind == "borrow-flats"]
+
+
+def test_borrowing_flats_from_a_nas_session(w):
+    donor = "SoulNebula-IC1848/2026-09-18-SoulNebula-2600MC-Z61"
+    asiair_frame(w.nas, f"{donor}/lights", "Light", "20260918-221000", obj="SoulNebula", angle=92, thumb=False)
+    for i in range(3):
+        asiair_frame(w.nas, f"{donor}/flats", "Flat", f"20260919-06300{i}", exposure_s=6.1, angle=92, seq=i + 1,
+                     thumb=False)
+    for i in range(4):
+        w.light(f"20260920-22{i}000", angle=91, seq=i + 1)
+    plan = w.plan()
+    d = decision(plan, "borrow-flats")
+    assert d.options[1]["value"] == f"nas:{donor}:92"
+    b = w.plan({d.id: d.options[1]["value"]}).borrowed
+    assert b[0]["from"] == donor and {f["from"] for f in b[0]["files"]} == {"nas"}
+    assert all(f["dst"].startswith(f"{SOUL_20}/flats/") for f in b[0]["files"])

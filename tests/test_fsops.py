@@ -97,3 +97,39 @@ def test_lock_refuses_a_second_writer_and_recovers_stale(cfg):
     lock.write_text(json.dumps({"holder": "crashed", "pid": 999999, "host": os.uname().nodename, "since": 0}))
     with fsops.WriteLock(cfg, "after a crash"):
         assert "after a crash" in lock.read_text()
+
+
+def test_catalog_writers(cfg):
+    s = "T/2026-09-23-T-2600MC-Z61"
+    assert fsops.write_generated(cfg, f"{s}/PROJECT_INFO.txt", "a\n") == "created"
+    assert fsops.write_generated(cfg, f"{s}/PROJECT_INFO.txt", "a\n") == "unchanged"
+    assert fsops.write_generated(cfg, f"{s}/PROJECT_INFO.txt", "b\n") == "updated"
+    with pytest.raises(ValueError):
+        fsops.write_generated(cfg, f"{s}/lights/f.fit", "not generated")
+
+    notes = f"{s}/.project_notes.txt"                                     # sanctioned dotfiles only, as the last part
+    assert fsops.append_lines(cfg, notes, ["one"]) == "created"
+    assert fsops.append_lines(cfg, notes, ["two"]) == "updated"
+    assert (cfg.astro_root / notes).read_text() == "one\ntwo\n"
+    assert fsops.write_new(cfg, f"{s}/.flats_are_copies", "x\n") == "created"
+    assert fsops.write_new(cfg, f"{s}/.flats_are_copies", "y\n") == "clash"
+    for bad in (f"{s}/.DS_Store", f".project_notes.txt/{s}", f"{s}/._PROJECT_INFO.txt"):
+        with pytest.raises(ValueError):
+            fsops.write_new(cfg, bad, "no")
+
+    csv = "Z95-ClaudeReferences/targets.csv"
+    assert fsops.replace_source_file(cfg, csv, "v1\n", "s1") == "updated"
+    assert fsops.replace_source_file(cfg, csv, "v1\n", "s2") == "unchanged"
+    assert fsops.replace_source_file(cfg, csv, "v2\n", "s3") == "updated"
+    assert (cfg.astro_root / "Z95-ClaudeReferences/_to_delete/targets.csv.s3").read_text() == "v1\n"
+
+    assert fsops.add_link(cfg, "103-ByDate/2026-09-23-T-2600MC-Z61", f"../{s}") == "created"
+    assert fsops.add_link(cfg, "103-ByDate/2026-09-23-T-2600MC-Z61", f"../{s}") == "clash"
+    assert (cfg.astro_root / "103-ByDate/2026-09-23-T-2600MC-Z61/PROJECT_INFO.txt").is_file()
+    for rel, target in (("T/link", "../T"), ("103-ByDate/abs", "/etc")):
+        with pytest.raises(ValueError):
+            fsops.add_link(cfg, rel, target)
+    (cfg.astro_root / "103-ByDate/real-folder").mkdir()
+    assert fsops.remove_link(cfg, "103-ByDate/real-folder") == "skipped"      # only symlinks are ever removed
+    assert fsops.remove_link(cfg, "103-ByDate/2026-09-23-T-2600MC-Z61") == "removed"
+    assert (cfg.astro_root / s / "PROJECT_INFO.txt").is_file()               # the session itself is untouched

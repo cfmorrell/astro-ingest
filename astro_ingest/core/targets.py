@@ -93,3 +93,36 @@ def match_object(obj: str, targets: list[Target]) -> Match:
                  if _squash(t.name) == key
                  or (_squash(t.name).startswith(key) and _squash(t.name)[len(key):] in _GENERIC_SUFFIXES))
     return Match(obj, hits, "name" if hits else None)
+
+
+TARGETS_FIELDS = ["folder", "name", "messier", "ngc", "ic", "other"]
+
+
+def new_target_row(folder: str, objects: list[str]) -> dict:
+    """A targets.csv row for a new target folder Chris named (e.g. "NeedleGalaxy-NGC4565"), with every catalog ID found
+    in the folder name and the frames' OBJECT names ("NGC 4565")."""
+    ids: dict[str, set[int]] = {"M": set(), "NGC": set(), "IC": set()}
+    other: list[str] = []
+    for token in folder.split("-")[1:] + list(objects):
+        cid = catalog_id(token)
+        if not cid:
+            continue
+        if cid[0] in ids:
+            ids[cid[0]].add(cid[1])
+        else:
+            label = {"SH2": "Sh2-"}.get(cid[0], cid[0])
+            other.append(f"{label}{cid[1]}")
+    return {"folder": folder, "name": folder.split("-")[0],
+            "messier": ";".join(str(n) for n in sorted(ids["M"])), "ngc": ";".join(str(n) for n in sorted(ids["NGC"])),
+            "ic": ";".join(str(n) for n in sorted(ids["IC"])), "other": ";".join(sorted(set(other)))}
+
+
+def csv_text(rows: list[dict]) -> str:
+    """targets.csv as the share keeps it: header row, one line per target, sorted by folder."""
+    import io
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=TARGETS_FIELDS, lineterminator="\n")
+    w.writeheader()
+    for r in sorted(rows, key=lambda r: r["folder"]):
+        w.writerow({k: r.get(k, "") for k in TARGETS_FIELDS})
+    return buf.getvalue()

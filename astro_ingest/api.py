@@ -1,7 +1,7 @@
 """FastAPI app: a JSON API plus the static frontend, in the same shape as astro-stacker.
 
-Writes only to STATE_DIR / CACHE_DIR (answers, frame-quality stats, rendered previews). Nothing on the NAS or the
-ASIAIR is touched until the copy (phase 4) and cleanup (phase 6) steps exist. StaticFiles is mounted last so it
+Writes only to STATE_DIR / CACHE_DIR (answers, frame-quality stats, rendered previews), except Copy & verify and
+Catalog, which write to the share through fsops. Nothing on the ASIAIR is deleted until the cleanup step (phase 6). StaticFiles is mounted last so it
 never shadows an API route.
 """
 
@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from astro_ingest import analysis, batch, db, jobs, service, staging, state
+from astro_ingest import analysis, batch, catalog, db, jobs, service, staging, state
 from astro_ingest.sources import devices, discover
 from astro_ingest.config import VERSION, Config
 from astro_ingest.core import imaging
@@ -229,6 +229,23 @@ def create_app(cfg: Config) -> FastAPI:
     @app.get("/api/batches")
     def list_batches():
         return {"batches": db.batches(cfg)}
+
+    # ---------------- catalog: PROJECT_INFO, targets.csv, index links, notes (reads the NAS only, not the ASIAIR)
+
+    @app.get("/api/catalog/preview")
+    def catalog_preview():
+        return catalog.preview(cfg).to_dict()
+
+    @app.post("/api/catalog/run")
+    def catalog_run():
+        if jobs.running("copy") or jobs.running("catalog"):
+            raise HTTPException(409, "a copy or catalog run is in progress")
+
+        def work(progress) -> dict:
+            return catalog.run(cfg, catalog.preview(cfg), progress)
+
+        job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="catalog")
+        return {"job_id": job.id}
 
     # ---------------- previews (astro-stacker's rendering, cached in CACHE_DIR)
 

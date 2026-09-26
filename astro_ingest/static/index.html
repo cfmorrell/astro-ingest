@@ -163,7 +163,7 @@
       </div>
       <div class="progress-wrap">
         <button id="copy-run-btn" class="primary">Approve &amp; copy</button>
-        <button id="copy-next-btn" class="ghost" disabled title="The File step arrives in phase 5">Next: File → (phase 5)</button>
+        <button id="copy-next-btn" class="ghost" disabled title="The Catalog step arrives in phase 5">Next: Catalog → (phase 5)</button>
       </div>
       <div id="copy-result"></div>
       <p class="hint">Copies each staged frame to its destination on the Astronomy share and checks it against the checksum taken when it was read from the device. Nothing is ever overwritten: a different file already at a destination is skipped and listed. A damaged NAS copy you chose to replace is moved to <code>_to_delete/</code> first. Staged copies are cleared as their NAS copies verify. Nothing on the device is touched.</p>
@@ -177,8 +177,8 @@
       <div id="copy-notincluded"></div>
     </div>
   </section>
-  <section class="step-panel" data-step="file">
-    <div class="card"><div class="card-title">File</div><p class="empty-hint">Arrives in phase 5: PROJECT_INFO, library reindex, new targets, index links.</p></div>
+  <section class="step-panel" data-step="catalog">
+    <div class="card"><div class="card-title">Catalog</div><p class="empty-hint">Arrives in phase 5: PROJECT_INFO, new targets, index links, calibration report.</p></div>
   </section>
   <section class="step-panel" data-step="clean">
     <div class="card"><div class="card-title">Clean up</div><p class="empty-hint">Arrives in phase 6: delete verified frames and their thumbnails from the ASIAIR, after your approval.</p></div>

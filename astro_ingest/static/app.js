@@ -4,9 +4,9 @@
  * collapsing) follows astro-stacker's static/app.js at commit f31cbcb.
  */
 
-const STEPS = ["connect", "scan", "stage", "review", "copy", "file", "clean"];
-const STEP_LABELS = { connect: "Connect", scan: "Scan", stage: "Stage", review: "Review", copy: "Copy & verify", file: "File", clean: "Clean up" };
-const STEP_PHASE = { file: "5", clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
+const STEPS = ["connect", "scan", "stage", "review", "copy", "catalog", "clean"];
+const STEP_LABELS = { connect: "Connect", scan: "Scan", stage: "Stage", review: "Review", copy: "Copy & verify", catalog: "Catalog", clean: "Clean up" };
+const STEP_PHASE = { catalog: "5", clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
 const LARGE_GROUP_THRESHOLD = 20;  // beyond this, collapse to flagged frames +/- 2 neighbours (as astro-stacker)
 const SMALL_GROUP_PEERS = 10;      // fewer frames than this to compare against: scoring is less reliable (M42 04-11)
 const THUMB = 320;
@@ -1166,7 +1166,7 @@ document.getElementById("stage-next-btn").addEventListener("click", () => { stat
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
 document.getElementById("copy-run-btn").addEventListener("click", runCopy);
 document.getElementById("review-next-btn").addEventListener("click", () => { state.activeStep = "copy"; showActiveStep(); });
-document.getElementById("copy-next-btn").addEventListener("click", () => { state.activeStep = "file"; showActiveStep(); });
+document.getElementById("copy-next-btn").addEventListener("click", () => { state.activeStep = "catalog"; showActiveStep(); });
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
 document.getElementById("find-btn").addEventListener("click", () => findDevices(false));

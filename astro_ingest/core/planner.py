@@ -50,6 +50,7 @@ TINY_GROUP = 3                          # light groups this small are asked abou
 BATCH_GAP = dt.timedelta(hours=1)       # a new calibration batch starts after a gap longer than this
 ANGLE_TOLERANCE = 3                     # degrees, compared mod 180 (a meridian flip reports +180)
 SUSPECT_ANGLE = 79                      # the ASIAIR's value when it hasn't plate-solved a rotation
+BORROW_DAYS = 7                         # cross-night flats: sibling nights at most this far apart (§7.4)
 
 
 @dataclass
@@ -143,6 +144,7 @@ class Plan:
     groups: list[Group]
     sessions: list[PlannedSession]
     decisions: list[Decision]
+    borrowed: list[dict] = field(default_factory=list)   # flats Chris chose to borrow from a sibling night (§7.4)
 
     def summary(self) -> dict:
         by_action = Counter(i.action for i in self.items)
@@ -184,6 +186,7 @@ class Plan:
             "groups": [asdict(g) for g in self.groups],
             "sessions": [{**asdict(s), "rel": s.rel} for s in self.sessions],
             "decisions": [{**asdict(d), "resolved": d.resolved} for d in self.decisions],
+            "borrowed": self.borrowed,
         })
 
 
@@ -192,6 +195,7 @@ TITLES = {
     "target": "Unknown target", "append": "Missing from session", "tiny-group": "Very few frames",
     "clock": "Clock mismatch", "scope": "Unknown telescope", "camera": "Unknown camera",
     "name-clash": "Different copy on NAS", "library-folder": "Library folder taken", "release": "Unmatched flats",
+    "borrow-flats": "No flats",
 }
 
 
@@ -224,6 +228,7 @@ class _Planner:
         self.sessions: dict[str, PlannedSession] = {}
         self.decisions: dict[str, Decision] = {}
         self.light_links: list[_LightLink] = []
+        self.borrowed: list[dict] = []
 
     # ------------------------------------------------------------ helpers
 
@@ -343,11 +348,12 @@ class _Planner:
         self.plan_library(library_darks, "darks")
         self.plan_library(bias, "bias")
         self.link_siblings()
+        self.borrow_flats()
 
         items = sorted(self.items.values(), key=lambda i: i.src)
         sessions = sorted(self.sessions.values(), key=lambda s: s.rel)
         decisions = sorted(self.decisions.values(), key=lambda d: (d.kind, d.id))
-        return Plan(self.scan.source_label, items, self.groups, sessions, decisions)
+        return Plan(self.scan.source_label, items, self.groups, sessions, decisions, self.borrowed)
 
     # ------------------------------------------------------------ clock
 
@@ -798,6 +804,84 @@ class _Planner:
                 msg = "no flats found for these lights"
                 if msg not in s.warnings:
                     s.warnings.append(msg)
+
+    # ------------------------------------------------------------ cross-night flats (§7.4)
+
+    def borrow_flats(self) -> None:
+        """A session getting new lights with no flats may borrow a sibling night's flats, offered only when target,
+        camera, scope and filter match, the nights are at most 7 days apart and the rotation matches (mod 180°,
+        ±3°; never the unsolved 79°). The default is not to borrow: a bad flat is worse than no flat (Chris)."""
+        flat_sessions = {f.rsplit("/", 1)[0] for g in self.groups if g.kind == "flats" for f in g.dst_folders}
+        for link in self.light_links:
+            s = self.sessions.get(link.session) if link.session else None
+            if s is None or (s.exists and s.lights == 0):
+                continue
+            if link.session in flat_sessions or self._nas_has_flats(link.session):
+                continue
+            lg = link.group
+            angles = [a for a in lg.angles if a != SUSPECT_ANGLE]
+            if not angles or lg.night is None:
+                continue
+            donors = self.flat_donors(s, lg, angles)
+            if not donors:
+                continue
+            filt = f" ({lg.filter})" if lg.filter else ""
+            d = self.decide("borrow-flats", (s.rel, lg.filter),
+                            f"No flats for {s.folder}{filt}. A nearby night's flats match its camera, scope, filter "
+                            f"and rotation ({angles[0]}°). Borrow them? A bad flat is worse than no flat.",
+                            [("none", "Don't borrow")] + [(x["id"], x["label"]) for x in donors], "none", [], link.group.id)
+            chosen = next((x for x in donors if x["id"] == d.resolved), None)
+            if chosen is None:
+                continue
+            sub = "flats" + (f"-{lg.filter}" if lg.filter else "")
+            files = []
+            for src, size in chosen["files"]:
+                dst = f"{s.rel}/{sub}/{src.rsplit('/', 1)[-1]}"
+                if chosen["from"] == "source":
+                    it = self.items[src]
+                    it.dsts.append(dst)
+                    it.reason += f"; borrowed by {s.folder} (Chris)"
+                files.append({"from": chosen["from"], "src": src, "size": size, "dst": dst})
+                s.flats += 1
+                s.bytes += size
+            s.warnings = [w for w in s.warnings if w != "no flats found for these lights"]
+            s.warnings.append(f"flats borrowed from {chosen['session'].split('/')[1]} (Chris)")
+            self.borrowed.append({"session": s.rel, "from": chosen["session"], "decision": d.id, "files": files})
+
+    def flat_donors(self, s: PlannedSession, lg: Group, angles: list[int]) -> list[dict]:
+        """Flat sets that qualify for borrowing: planned from this source, or already in a NAS session."""
+        def rotation_ok(flat_angles) -> bool:
+            fa = set(flat_angles)
+            return bool(fa) and SUSPECT_ANGLE not in fa and all(any(_angle_close(a, b) for b in angles) for a in fa)
+
+        def near(night) -> bool:
+            return night is not None and night != lg.night and abs((night - lg.night).days) <= BORROW_DAYS
+
+        out = []
+        for g in self.groups:
+            if g.kind != "flats" or not near(g.night) or (g.camera, g.scope, g.filter) != (lg.camera, lg.scope, lg.filter):
+                continue
+            donor = next((f.rsplit("/", 1)[0] for f in g.dst_folders if f.startswith(f"{s.target_folder}/")), None)
+            files = [(r, self.items[r].size) for r in g.items if self.items[r].action == COPY and self.items[r].dsts]
+            if donor and files and rotation_ok(g.angles):
+                out.append({"id": f"source:{g.id}", "from": "source", "session": donor, "files": files,
+                            "label": f"Borrow {len(files)} flats from {g.night} ({g.angles[0]}°, from this device)"})
+        for ns in self.index.sessions:
+            p = ns.parsed
+            if (ns.target_folder != s.target_folder or ns.rel == s.rel or not p or not near(p.night)
+                    or p.camera_token != lg.camera or (p.scope_token or None) != (lg.scope or None)):
+                continue
+            sets: dict[int, list] = defaultdict(list)
+            for nf in sorted(ns.flat_files, key=lambda f: f.rel):
+                fn = asiair.parse_name(nf.rel.rsplit("/", 1)[-1])
+                if fn and fn.type == "Flat" and fn.filter == lg.filter and fn.angle is not None:
+                    sets[fn.angle].append((nf.rel, nf.size))
+            for angle, files in sorted(sets.items()):
+                if rotation_ok([angle]):
+                    files = files[:rules.CALIBRATION_CAP]
+                    out.append({"id": f"nas:{ns.rel}:{angle}", "from": "nas", "session": ns.rel, "files": files,
+                                "label": f"Borrow {len(files)} flats from {p.night} ({angle}°, already on the NAS)"})
+        return out
 
     def _nas_has_flats(self, srel: str) -> bool:
         t, f = srel.split("/", 1)

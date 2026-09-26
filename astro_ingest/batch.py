@@ -29,6 +29,7 @@ class Preview:
     destinations: list[dict]                       # [{folder, files, bytes}]
     not_included: list[dict]                       # [{src, reason}]
     clear_after: list[str] = field(default_factory=list)  # staged copies to clear when the batch finishes
+    borrowed: dict[str, str] = field(default_factory=dict)  # session -> sibling session its flats come from (§7.4)
 
     @property
     def copy_ops(self) -> list[dict]:
@@ -37,7 +38,7 @@ class Preview:
     def summary(self) -> dict:
         return {"copies": len(self.copy_ops), "retires": len(self.ops) - len(self.copy_ops),
                 "bytes": sum(o["size"] for o in self.copy_ops), "destinations": self.destinations,
-                "not_included": len(self.not_included)}
+                "not_included": len(self.not_included), "borrowed": self.borrowed}
 
 
 def _dest_folder(dst: str) -> str:
@@ -73,8 +74,30 @@ def preview(planned) -> Preview:
             ops.append({"kind": "copy", "src": it.src, "staged": str(store.staged_path(src.slug, it.src)), "dst": dst,
                         "size": rec["size"], "blake2b": rec["blake2b"]})
             per_dest[_dest_folder(dst)].append(rec["size"])
+    borrowed = {}
+    for b in getattr(planned.plan, "borrowed", []):
+        borrowed[b["session"]] = b["from"]
+        for f in b["files"]:
+            if f["from"] != "nas":
+                continue   # flats from this device: already an extra destination of their item above
+            path = _nas_path(src.cfg, f["src"]) if hasattr(src, "cfg") else None
+            if path is None:
+                not_included.append({"src": f"nas:{f['src']}", "reason": "borrowed flat not found on the NAS"})
+                continue
+            ops.append({"kind": "copy", "src": f"nas:{f['src']}", "staged": str(path), "dst": f["dst"],
+                        "size": path.stat().st_size, "blake2b": fsops.hash_file(path)})
+            per_dest[_dest_folder(f["dst"])].append(path.stat().st_size)
     destinations = [{"folder": k, "files": len(v), "bytes": sum(v)} for k, v in sorted(per_dest.items())]
-    return Preview(ops, destinations, not_included, clear_after)
+    return Preview(ops, destinations, not_included, clear_after, borrowed)
+
+
+def _nas_path(cfg: Config, rel: str) -> Path | None:
+    """A NAS file to copy from (dev: the sandbox first, then the read-only live share)."""
+    for root in (Path(cfg.astro_root), Path(cfg.astro_nas)):
+        p = root / rel
+        if p.is_file() and not p.is_symlink():
+            return p
+    return None
 
 
 def approve(cfg: Config, planned, pv: Preview) -> str:
