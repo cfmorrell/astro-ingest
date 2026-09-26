@@ -215,6 +215,10 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    against the scan. Delete each `.fit` **and** its `_thn.jpg` plus orphan thumbnails, prune empty non-structural
    dirs, and log every delete. Test against a scratch copy (`/astro-sandbox/_asiair-scratch`) with LocalDirSource.
    Test SMB deletes against a throwaway Samba share before the real ASIAIR is ever touched.
+6b. **Full-scale functional test, then a fine-detail review (Chris, 2026-09-25).** Once every step works end to
+   end (Connect → Scan → Stage → Review → Copy & verify → File → Clean up), run a full-size ingest of the sample and
+   then go through the app screen by screen together for refinements: wording, layout, defaults, and anything that
+   only shows up with real data at full scale. Basic functionality first, polish after.
 7. **Production.** App Dockerfile, a `docker-publish` workflow (same as the stacker), and a run script (`ASTRO_ROOT=/astro` rw, LAN access for discovery), put the app
    behind Nginx Proxy Manager with authentication (it deletes source data), and confirm the NAS backup first.
 

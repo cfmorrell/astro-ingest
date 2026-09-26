@@ -41,8 +41,10 @@ def test_stage_copies_verified_and_records(tmp_path):
     cfg, air, entries = make(tmp_path)
     before = {p: p.read_bytes() for p in air.rglob("*")  if p.is_file()}
     progress = []
-    result = staging.run_staging(cfg, LocalDirSource(air), "dev", entries, True, lambda p, m: progress.append(m))
+    result = staging.run_staging(cfg, LocalDirSource(air), "dev", entries, True, lambda p, m, **k: progress.append((m, k)))
     assert result["staged"] == 4 and progress
+    last = progress[-1][1]   # structured stats for the Stage page
+    assert (last["files_done"], last["files_total"], last["bytes_done"]) == (4, 4, last["bytes_total"])
     store = staging.StagingStore(cfg)
     for e in entries:
         staged = cfg.staging_dir / "dev" / e.rel
@@ -56,16 +58,16 @@ def test_resume_reads_each_frame_once(tmp_path):
     cfg, air, entries = make(tmp_path)
     flaky = CountingSource(air, fail_after=2)
     with pytest.raises(staging.StagingError, match="run Stage again"):
-        staging.run_staging(cfg, flaky, "dev", entries, True, lambda p, m: None)
+        staging.run_staging(cfg, flaky, "dev", entries, True, lambda p, m, **k: None)
     assert sum(1 for e in entries if staging.StagingStore(cfg).get("dev", e)) == 2
     again = CountingSource(air)
-    result = staging.run_staging(cfg, again, "dev", entries, True, lambda p, m: None)
+    result = staging.run_staging(cfg, again, "dev", entries, True, lambda p, m, **k: None)
     assert (result["staged"], result["already_staged"], again.reads) == (2, 2, 2)
 
 
 def test_changed_source_is_restaged(tmp_path):
     cfg, air, entries = make(tmp_path, n=1)
-    staging.run_staging(cfg, LocalDirSource(air), "dev", entries, True, lambda p, m: None)
+    staging.run_staging(cfg, LocalDirSource(air), "dev", entries, True, lambda p, m, **k: None)
     e = entries[0]
     changed = type(e)(e.rel, e.size, e.mtime + 60)       # same file listed with a new mtime
     assert staging.StagingStore(cfg).get("dev", changed) is None
@@ -73,7 +75,7 @@ def test_changed_source_is_restaged(tmp_path):
 
 def test_staged_source_prefers_the_copy(tmp_path):
     cfg, air, entries = make(tmp_path, n=2)
-    staging.run_staging(cfg, LocalDirSource(air), "dev", entries[:1], True, lambda p, m: None)
+    staging.run_staging(cfg, LocalDirSource(air), "dev", entries[:1], True, lambda p, m, **k: None)
     counting = CountingSource(air)
     src = staging.StagedSource(counting, cfg, "dev", local=False)
     list(src.walk())

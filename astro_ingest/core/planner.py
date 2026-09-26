@@ -123,12 +123,13 @@ class PlannedSession:
 class Decision:
     id: str
     kind: str                  # target | append | tiny-group | clock | scope | name-clash | library-folder | release
-    question: str
+    question: str              # short: names what's wrong and asks; paths live in the item list, not here
     options: list[dict]        # [{"value": ..., "label": ...}]
     default: str | None
     items: list[str]
     group: str | None = None
     answer: str | None = None  # Chris's answer, if given
+    title: str = ""            # the problem in a few words, shown as the decision's label ("Unmatched flats")
 
     @property
     def resolved(self) -> str | None:
@@ -186,6 +187,22 @@ class Plan:
         })
 
 
+# Decision labels name the problem, not the fix (Chris, 2026-09-25)
+TITLES = {
+    "target": "Unknown target", "append": "Missing from session", "tiny-group": "Very few frames",
+    "clock": "Clock mismatch", "scope": "Unknown telescope", "camera": "Unknown camera",
+    "name-clash": "Different copy on NAS", "library-folder": "Library folder taken", "release": "Unmatched flats",
+}
+
+
+def _frame_label(frame: SourceFrame) -> str:
+    """'NGC 7000 #0029 (07-04 00:30)': enough to recognise a frame without its full name."""
+    n = frame.name
+    if n is None:
+        return frame.rel.rsplit("/", 1)[-1]
+    return f"{n.object or n.type} #{n.seq:04d} ({n.saved_local:%m-%d %H:%M})"
+
+
 def _stable_id(*parts: object) -> str:
     return hashlib.sha1("\x1f".join(map(str, parts)).encode()).hexdigest()[:10]
 
@@ -231,10 +248,10 @@ class _Planner:
         return it
 
     def decide(self, kind: str, key: object, question: str, options: list[tuple[str, str]], default: str | None,
-               items: list[str], group: str | None = None) -> Decision:
+               items: list[str], group: str | None = None, title: str | None = None) -> Decision:
         did = f"{kind}-{_stable_id(kind, key)}"
         d = Decision(did, kind, question, [{"value": v, "label": lbl} for v, lbl in options], default, list(items),
-                     group, self.answers.get(did))
+                     group, self.answers.get(did), title or TITLES.get(kind, kind))
         self.decisions[did] = d
         for rel in items:
             self.items[rel].decision = did
@@ -267,14 +284,16 @@ class _Planner:
             frame.entry.size % 2880 == 0
         if truncated:
             it.warnings.append("the NAS copy looks truncated (not a whole number of FITS blocks)")
+        nas_size = self.index.find(frame.rel.rsplit("/", 1)[-1])[0].size
         d = self.decide("name-clash", frame.rel,
-                        f"{frame.rel.rsplit('/', 1)[-1]} is already on the NAS at {diff[0]} but with a different size "
-                        f"({self.index.find(frame.rel.rsplit('/', 1)[-1])[0].size:,} bytes there, {frame.entry.size:,} "
-                        f"here){' — the NAS copy looks truncated' if truncated else ''}. Replace it?",
-                        [("replace", "Retire the NAS copy to _to_delete/ and copy this one"),
+                        f"{_frame_label(frame)}: the NAS copy is {nas_size / 1e6:.1f} MB, this one "
+                        f"{frame.entry.size / 1e6:.1f} MB{' (the NAS copy looks truncated)' if truncated else ''}. "
+                        "Replace it?",
+                        [("replace", "Replace (old copy to _to_delete)"),
                          ("skip", "Leave on the ASIAIR")],
                         # A damaged NAS copy with a good one here: use the better copy (Chris, 2026-09-25)
-                        "replace" if truncated else None, [frame.rel], it.group)
+                        "replace" if truncated else None, [frame.rel], it.group,
+                        "Damaged copy on NAS" if truncated else "Different copy on NAS")
         if d.resolved == "replace":
             it.action, it.dsts, it.retire = COPY, [diff[0]], list(diff)
             it.reason = "replaces a bad copy on the NAS (Chris)"
@@ -341,8 +360,8 @@ class _Planner:
         for folder, fs in sorted(bad.items()):
             for f in fs:
                 self.item(f, PENDING, "filename time disagrees with DATE-OBS")
-            d = self.decide("clock", folder, f"{len(fs)} frame(s) in {folder} have a filename time that disagrees "
-                            "with the FITS DATE-OBS (ASIAIR clock or time zone). Use the filename time anyway?",
+            d = self.decide("clock", folder, f"{len(fs)} frame(s) in {folder.split('/')[-1]}: the filename time "
+                            "disagrees with DATE-OBS (ASIAIR clock or time zone). Use the filename time?",
                             [("use", "Use the filename time"), ("skip", "Leave on the ASIAIR")], None,
                             [f.rel for f in fs])
             if d.resolved == "use":
@@ -409,14 +428,14 @@ class _Planner:
         # 2. target from the object name; ask when unclear
         cam = rules.camera_from(cam_token)
         if cam is None:
-            self.pending_group(link, status, "camera", f"Unknown camera for {len(fs)} {obj} lights on {night}.",
+            self.pending_group(link, status, "camera", f"{len(fs)} {obj} lights ({night}): camera not recognized.",
                                [("skip", "Leave on the ASIAIR")])
             return
         if scope is None:
             self.pending_group(
                 link, status, "scope",
-                f"{obj} on {night}: focal length {fl:g} mm doesn't match a known telescope. Which scope was it?"
-                if fl is not None else f"{obj} on {night}: no focal length in the headers. Which scope was it?",
+                f"{obj} ({night}): focal length {fl:g} mm matches no telescope. Which was it?"
+                if fl is not None else f"{obj} ({night}): no focal length in the headers. Which telescope?",
                 [(s.token or "", s.name) for _, _, s in rules.FOCAL_LENGTH_SCOPES] + [("skip", "Leave on the ASIAIR")])
             return
         target, new_target = self.resolve_target(link, status, obj, night)
@@ -424,8 +443,8 @@ class _Planner:
             return
         live = [f for f in fs if status[f.rel].action == COPY]
         if len(live) <= TINY_GROUP:
-            d = self.decide("tiny-group", gid, f"Only {len(live)} {obj} light(s) on {night}. File them as a session, "
-                            "or treat them as test frames?",
+            d = self.decide("tiny-group", gid, f"Only {len(live)} {obj} light{'s' if len(live) != 1 else ''} on "
+                            f"{night}. A session, or test frames?",
                             [("file", "File as a session"), ("test", "Test frames: offer for deletion")], None,
                             [f.rel for f in fs if status[f.rel].action == COPY], gid)
             if d.resolved is None:
@@ -455,11 +474,11 @@ class _Planner:
         proposal = f"{cid[0]}{cid[1]}" if cid and cid[0] in ("M", "NGC", "IC") else None
         options.append((f"new:{proposal}" if proposal else "new:", "New target (you name it)"))
         options.append(("skip", "Leave on the ASIAIR"))
-        question = (f"'{obj}' on {night} could be several targets: {', '.join(t.folder for t in m.candidates)}. Which?"
-                    if m.candidates else
-                    f"'{obj}' on {night} doesn't match any target in targets.csv. New target, or an existing one?")
+        question = (f"'{obj}' ({night}) matches {len(m.candidates)} targets. Which one?" if m.candidates else
+                    f"'{obj}' ({night}) isn't in targets.csv. New target?")
         d = self.decide("target", (obj, g.camera, g.scope), question, options, None,
-                        [r for r, it in status.items() if it.action == COPY], g.id)
+                        [r for r, it in status.items() if it.action == COPY], g.id,
+                        "Ambiguous target" if m.candidates else "Unknown target")
         answer = d.resolved
         if answer is None or answer == "skip":
             if answer is None:
@@ -499,8 +518,8 @@ class _Planner:
             status[rel].dsts = [f"{dst_folder}/{rel.rsplit('/', 1)[-1]}"]
         if session.exists and new:
             d = self.decide("append", (session.rel, g.id),
-                            f"{len(new)} {g.object} light(s) from {g.night} are not in {session.rel}, which is "
-                            "already on the NAS (e.g. subs you once dropped). Append them?",
+                            f"{len(new)} {g.object} light{'s' if len(new) != 1 else ''} from {g.night} aren't in that "
+                            "session on the NAS (maybe subs you once dropped). Append them?",
                             [("append", "Append to the session"), ("skip", "Leave on the ASIAIR")], "append",
                             new, g.id)
             for rel in new:
@@ -631,11 +650,10 @@ class _Planner:
             return
         if not targets:
             d = self.decide("release", gid,
-                            f"No lights found on the ASIAIR or the NAS for {len(fs)} {kind} from {g.night} "
-                            f"({g.exposure_s:g} s{', ' + str(angles[0]) + '°' if angles else ''}). Keep them on the "
-                            "ASIAIR, or release them for deletion?",
+                            f"{len(fs)} {kind} from {g.night} ({g.exposure_s:g} s) have no lights on the ASIAIR or the "
+                            "NAS. Keep them, or release them for deletion?",
                             [("keep", "Keep on the ASIAIR"), ("release", "Release for deletion")], "keep",
-                            [f.rel for f in fs], gid)
+                            [f.rel for f in fs], gid, "Unmatched flats" if kind == "flats" else "Unmatched dark flats")
             for it in items.values():
                 if d.resolved == "release":
                     it.action, it.reason = NOT_KEPT, "no matching lights; released for deletion (Chris)"
@@ -730,7 +748,7 @@ class _Planner:
             items[f.rel] = it
         self.apply_exclusions(items)
         if cam is None or not cam.cooled:
-            self.pending_group(g, items, "camera", f"{kind} batch from {g.night}: unknown camera, no library to file it in.",
+            self.pending_group(g, items, "camera", f"{kind} from {g.night}: camera not recognized, no library for it.",
                                [("skip", "Leave on the ASIAIR")])
             return
         folder = (rules.bias_dir(cam, g.night, mean_temp) if kind == "bias"
@@ -742,8 +760,8 @@ class _Planner:
         others = [n for n, fl in self.index.files.items() for x in fl if x.rel.startswith(folder + "/")]
         if others:
             d = self.decide("library-folder", folder,
-                            f"{folder} is already on the NAS with {len(others)} other frame(s). A second batch shot "
-                            "the same day? It is never merged or overwritten.",
+                            f"The {kind} library folder for {g.night} ({folder.split('/')[-1]}) already holds "
+                            f"{len(others)} other frame(s). Never merged: leave these on the ASIAIR?",
                             [("skip", "Leave on the ASIAIR")], None, new, gid)
             for r in new:
                 items[r].action = SKIP if d.resolved == "skip" else PENDING

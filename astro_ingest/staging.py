@@ -115,7 +115,7 @@ def stage_one(cfg: Config, source: Source, store: StagingStore, slug: str, entry
 
 
 def run_staging(cfg: Config, source: Source, slug: str, entries: list[SourceEntry], measure_rate: bool,
-                progress: Callable[[float, str], None]) -> dict:
+                progress: Callable[..., None]) -> dict:
     """Stage every entry not already staged. Stops at the first read error (device gone): run again to resume."""
     store = StagingStore(cfg)
     todo = [e for e in entries if store.get(slug, e) is None]
@@ -127,12 +127,16 @@ def run_staging(cfg: Config, source: Source, slug: str, entries: list[SourceEntr
         nonlocal done_bytes
         done_bytes += k
 
-    for n, e in enumerate(todo, 1):
+    def report(n_done: int, message: str) -> None:
         elapsed = time.monotonic() - started
         rate = done_bytes / elapsed / 1e6 if elapsed > 1 and done_bytes else None
-        left = f", about {(total - done_bytes) / 1e6 / rate / 60:.0f} min left" if rate else ""
-        progress(done_bytes / total * 100.0 if total else 100.0,
-                 f"staging {e.rel} ({n}/{len(todo)}{f', {rate:.1f} MB/s' if rate else ''}{left})")
+        eta = (total - done_bytes) / 1e6 / rate if rate else None
+        progress(done_bytes / total * 100.0 if total else 100.0, message, files_done=n_done, files_total=len(todo),
+                 bytes_done=done_bytes, bytes_total=total, mb_s=round(rate, 2) if rate else None,
+                 eta_s=round(eta) if eta is not None else None)
+
+    for n, e in enumerate(todo, 1):
+        report(n - 1, f"staging {e.rel} ({n}/{len(todo)})")
         try:
             stage_one(cfg, source, store, slug, e, on_bytes)
             staged += 1
@@ -145,6 +149,7 @@ def run_staging(cfg: Config, source: Source, slug: str, entries: list[SourceEntr
                                f"{staged} file(s) staged so far; run Stage again to continue") from exc
         if n % 10 == 0:
             store.save()
+    report(staged, f"staged {staged} file(s)")
     seconds = time.monotonic() - started
     if measure_rate and done_bytes > 50e6 and seconds > 0:
         store.rate = {"mb_s": round(done_bytes / seconds / 1e6, 2), "measured_at": time.time(),

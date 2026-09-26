@@ -174,11 +174,12 @@ def create_app(cfg: Config) -> FastAPI:
 
         def work(progress) -> dict:
             result = staging.run_staging(cfg, src.source, src.slug, todo, measure_rate=not src.local,
-                                         progress=lambda pct, msg: progress(pct * 0.9, msg))
+                                         progress=lambda pct, msg, **st: progress(pct * 0.9, msg, **st))
             src.reload()
             q = replan()
             targets = analysis.targets_by_group(cfg, q.source, q.scan, q.index, q.plan)
-            result["quality"] = analysis.run_scoring(cfg, targets, lambda pct, msg: progress(90 + pct * 0.1, msg))
+            result["quality"] = analysis.run_scoring(cfg, targets, lambda pct, msg: progress(90 + pct * 0.1, msg,
+                                                                                               phase="scoring"))
             replan()
             return result
 

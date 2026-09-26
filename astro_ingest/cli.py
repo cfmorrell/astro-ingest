@@ -257,7 +257,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
           flush=True)
     last = [-10.0]
 
-    def progress(pct: float, msg: str) -> None:
+    def progress(pct: float, msg: str, **stats) -> None:
         if pct - last[0] >= 5 or pct >= 100:
             print(f"[{pct:5.1f}%] {msg}", flush=True)
             last[0] = pct

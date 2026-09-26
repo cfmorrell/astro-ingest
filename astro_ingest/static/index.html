@@ -72,13 +72,13 @@
         <div id="stage-status-badge" class="badge">not staged</div>
       </div>
       <div id="stage-summary"></div>
+      <div id="stage-progress" class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
+      </div>
       <div class="progress-wrap">
         <button id="stage-run-btn" class="primary">Stage</button>
         <button id="stage-next-btn" class="ghost" style="display:none;">Next: Review →</button>
-      </div>
-      <div id="stage-progress" class="progress-wrap" style="display:none;">
-        <div class="progress-bar"><div class="progress-fill"></div></div>
-        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
       </div>
       <div id="stage-result"></div>
       <p class="hint">Each selected frame is read from the device once, checksummed on the way in, and written to the staging share; scoring, previews and filing then work from that copy at disk speed. Nothing on the device is changed. If the connection drops, press Stage again to continue where it stopped.</p>

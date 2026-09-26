@@ -654,24 +654,57 @@ function renderSelect() {
 
 // ---------- stage ----------
 
-function renderStage() {
+function clock(seconds) {
+  // "12 min", "1 h 05 min", "under a minute"
+  if (seconds === null || seconds === undefined) return "…";
+  const m = Math.round(seconds / 60);
+  if (m < 1) return "under a minute";
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+function renderStage(live) {
+  // `live`: the running stage job's stats (files_done/total, bytes_done/total, mb_s, eta_s), if one is running
   const p = state.plan;
   if (!p) return;
   const selected = selectedItems();
   const toRead = selected.filter((i) => !i.staged);
   const bytes = toRead.reduce((a, i) => a + i.size, 0);
+  const allBytes = selected.reduce((a, i) => a + i.size, 0);
   const box = document.getElementById("stage-summary");
   box.innerHTML = "";
-  box.appendChild(el("div", { class: "stat-row" }, [
-    stat(toRead.length, `frames to read · ${gb(bytes)}`),
-    stat(selected.length - toRead.length, "already staged", "ok"),
-    stat(roughTime(bytes), "estimated over Wi-Fi"),
-  ]));
+  let remaining, frames, data, speed;
+  if (live && live.files_total !== undefined) {
+    remaining = [live.eta_s !== null ? clock(live.eta_s) : "estimating…", "time remaining", "ok"];
+    frames = [`${live.files_done} / ${live.files_total}`, "frames read"];
+    data = [`${gb(live.bytes_done)} / ${gb(live.bytes_total)}`, "data read"];
+    speed = [live.mb_s ? `${live.mb_s} MB/s` : "…", "speed"];
+  } else if (!selected.length) {
+    remaining = ["—", "nothing selected: choose frames on the Scan step"];
+    frames = ["0", "frames"]; data = ["0 B", "data"]; speed = ["—", "speed"];
+  } else if (!toRead.length) {
+    remaining = ["done", "everything selected is staged", "ok"];
+    frames = [`${selected.length} / ${selected.length}`, "frames staged"];
+    data = [gb(allBytes), "staged"]; speed = [p.rate_kind === "measured" ? `${p.rate_mb_s} MB/s` : "—", "last measured speed"];
+  } else {
+    remaining = [roughTime(bytes).replace("about ", "~"), `estimated at ~${p.rate_mb_s} MB/s (${p.rate_kind === "measured" ? "measured" : "typical Wi-Fi"})`, "ok"];
+    frames = [`${selected.length - toRead.length} / ${selected.length}`, "frames staged"];
+    data = [`${gb(bytes)}`, "to read"]; speed = [p.rate_kind === "measured" ? `${p.rate_mb_s} MB/s` : "—", "last measured speed"];
+  }
+  box.appendChild(el("div", { class: "stat-row" }, [remaining, frames, data, speed].map(([n, l, k]) => stat(n, l, k))));
+
+  // the progress bar is always shown: idle, running, or complete
+  const prog = document.getElementById("stage-progress");
+  if (!live) {
+    const pct = selected.length ? Math.round(((allBytes - bytes) / (allBytes || 1)) * 100) : 0;
+    prog.querySelector(".progress-fill").style.width = `${pct}%`;
+    prog.querySelector(".pct").textContent = `${pct}%`;
+    prog.querySelector(".msg").textContent = !selected.length ? "" : toRead.length ? "ready to stage" : "all selected frames are staged";
+  }
   const btn = document.getElementById("stage-run-btn");
-  btn.textContent = toRead.length ? `Stage ${toRead.length} frame${toRead.length === 1 ? "" : "s"}` : "Everything selected is staged";
+  btn.textContent = live ? "Staging…" : toRead.length ? `Stage ${toRead.length} frame${toRead.length === 1 ? "" : "s"}` : "Everything selected is staged";
   if (!state.stageRunning) btn.disabled = toRead.length === 0;
-  setStepBadge("stage-status-badge", toRead.length ? "" : "ok", toRead.length ? "not staged" : (selected.length ? "staged" : "nothing selected"));
-  document.getElementById("stage-next-btn").style.display = toRead.length ? "none" : "inline-block";
+  setStepBadge("stage-status-badge", live ? "accent" : toRead.length ? "" : "ok", live ? "staging…" : toRead.length ? "not staged" : (selected.length ? "staged" : "nothing selected"));
+  document.getElementById("stage-next-btn").style.display = !live && selected.length && !toRead.length ? "inline-block" : "none";
 }
 
 async function watchStageJob(jobId) {
@@ -684,12 +717,12 @@ async function watchStageJob(jobId) {
     res.innerHTML = "";
     if (snap.status === "succeeded") {
       const r = snap.result;
-      res.appendChild(el("div", { class: "hint" }, [`Staged ${r.staged} frame(s) (${gb(r.bytes)} in ${Math.round(r.seconds)} s${r.mb_s ? `, ${r.mb_s} MB/s` : ""}); ${r.already_staged} were already staged. Scored ${r.quality.scored} frame(s).`]));
+      res.appendChild(el("div", { class: "hint" }, [`Staged ${r.staged} frame(s) (${gb(r.bytes)} in ${clock(r.seconds)}${r.mb_s ? `, ${r.mb_s} MB/s` : ""}); ${r.already_staged} were already staged. Scored ${r.quality.scored} frame(s).`]));
     } else {
       res.appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "staging failed"]));
     }
     await loadPlan(false);
-  });
+  }, (snap) => renderStage(snap.stats && snap.stats.phase !== "scoring" ? snap.stats : null));
 }
 
 async function runStage() {
@@ -805,7 +838,7 @@ function renderDecisions(p) {
     };
     const header = el("div", { class: "decision-header", onclick: toggle, title: collapsed ? "expand" : "collapse" }, [
       el("span", { class: "decision-chevron" }, [collapsed ? "▸" : "▾"]),
-      el("span", { class: `badge ${d.resolved === null ? "warn" : "accent"}` }, [d.kind]),
+      el("span", { class: `badge ${d.resolved === null ? "warn" : "accent"}` }, [d.title || d.kind]),
       el("span", { class: "hint", style: "margin:0;" }, [d.answer !== null ? `answered: ${d.answer}` : d.resolved === null ? "needs your answer" : `default: ${d.resolved}`]),
       d.answer !== null ? el("span", {
         class: "toggle-adv", style: "margin:0 0 0 auto;",
@@ -919,7 +952,7 @@ function renderCleanup(p) {
 
 // ---------- jobs (astro-stacker's pollJob shape) ----------
 
-async function pollJob(jobId, progressEl, onDone) {
+async function pollJob(jobId, progressEl, onDone, onTick) {
   const fill = progressEl.querySelector(".progress-fill");
   const pct = progressEl.querySelector(".pct");
   const msg = progressEl.querySelector(".msg");
@@ -931,6 +964,7 @@ async function pollJob(jobId, progressEl, onDone) {
     fill.style.width = `${Math.min(100, Math.max(0, p)).toFixed(0)}%`;
     pct.textContent = `${p.toFixed(0)}%`;
     msg.textContent = snap.current_line || "";
+    if (onTick) onTick(snap);
     if (snap.status === "succeeded" || snap.status === "failed") { await onDone(snap); return; }
     await new Promise((r) => setTimeout(r, 1500));
   }

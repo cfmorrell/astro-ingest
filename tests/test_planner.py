@@ -382,3 +382,13 @@ def test_a_replacement_can_be_left_out_too(w):
     rel = f"Autorun/Light/NGC 6888/{good.name}"
     item = by_name(w.plan({f"exclude:{rel}": "1"}), good.name)[0]
     assert (item.action, item.dsts, item.retire) == (P.EXCLUDED, [], [])
+
+
+def test_decision_titles_name_the_problem(w):
+    w.flat("20260516-153800", exposure_s=4, angle=79, FOCALLEN=1384)          # flats with no lights
+    w.light("20250611-212845", obj="M13", FOCALLEN=570)                       # a single light
+    for i in range(4):
+        w.light(f"20260427-21{i}000", obj="NGC 4565", FOCALLEN=1384, seq=i + 1)   # unknown target
+    titles = {d.kind: d.title for d in w.plan().decisions}
+    assert titles == {"release": "Unmatched flats", "tiny-group": "Very few frames", "target": "Unknown target"}
+    assert all(len(d.question) < 140 and "/" not in d.question for d in w.plan().decisions)   # brief, no paths

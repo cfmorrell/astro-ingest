@@ -33,6 +33,7 @@ class Job:
     steps: list = field(default_factory=list)
     current_step_index: Optional[int] = None
     project: str = ""  # stacker's per-project key; astro-ingest has one "project" (the source), kept for shape
+    stats: dict = field(default_factory=dict)  # astro-ingest addition: structured progress (e.g. files/bytes/eta)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def snapshot(self) -> dict:
@@ -43,6 +44,7 @@ class Job:
                 "current_command": self.current_command, "percent_complete": self.percent_complete,
                 "current_line": self.current_line, "steps": self.steps,
                 "current_step_index": self.current_step_index, "result": self.result, "error": self.error,
+                "stats": dict(self.stats),
             }
 
 
@@ -68,10 +70,10 @@ def get_job(job_id: str) -> Optional[Job]:
         return _jobs.get(job_id)
 
 
-def create_python_job(work: Callable[[Callable[[float, str], None]], dict], log_dir: Path, kind: str = "",
-                      project: str = "") -> Job:
-    """Run work(progress) in a background thread. work() calls progress(percent, message) as it goes and returns a
-    dict stored as job.result. Each progress message is also appended to the job's log file."""
+def create_python_job(work: Callable[..., dict], log_dir: Path, kind: str = "", project: str = "") -> Job:
+    """Run work(progress) in a background thread. work() calls progress(percent, message, **stats) as it goes and
+    returns a dict stored as job.result. Each progress message is also appended to the job's log file; the optional
+    keyword stats (numbers for the UI, e.g. files_done, eta_s) are kept on the job snapshot."""
     job_id = uuid.uuid4().hex[:12]
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{job_id}.log"
@@ -81,10 +83,11 @@ def create_python_job(work: Callable[[Callable[[float, str], None]], dict], log_
     with _registry_lock:
         _jobs[job_id] = job
 
-    def progress(percent: float, message: str) -> None:
+    def progress(percent: float, message: str, **stats) -> None:
         with job._lock:
             job.percent_complete = percent
             job.current_line = message
+            job.stats.update(stats)
         with log_path.open("a") as f:
             f.write(f"{message}\n")
 
