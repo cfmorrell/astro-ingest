@@ -67,6 +67,11 @@ class StagingStore:
         p = self.staged_path(slug, entry.rel)
         return rec if p.is_file() and p.stat().st_size == rec["size"] else None
 
+    def seen(self, slug: str, entry: SourceEntry) -> bool:
+        """This exact source file was staged at some point (even if its staged copy has since been cleared)."""
+        rec = self.files.get(self.key(slug, entry.rel))
+        return bool(rec) and rec["size"] == entry.size and int(rec["mtime"]) == int(entry.mtime)
+
     def save(self) -> None:
         state.write_json(self.cfg, self.path, {"version": 1, "files": self.files, "rate": self.rate})
 
@@ -189,3 +194,14 @@ class StagedSource:
         if self.staged(rel):
             return open(self.store.staged_path(self.slug, rel), "rb")
         return self.source.open_read(rel)
+
+
+def needs_staging(store: StagingStore, slug: str, entry: SourceEntry, action: str) -> bool:
+    """Does the Stage step have to read this frame (again)?
+
+    A frame going to the NAS needs a staged copy on disk. A quality-rejected frame only needed reading once to be
+    scored: after its staged copy is cleared it must not be pulled over Wi-Fi again (unless Chris keeps it, which
+    turns it back into a copy that needs its file)."""
+    if action not in STAGEABLE or store.get(slug, entry):
+        return False
+    return not (action == P.REJECTED and store.seen(slug, entry))

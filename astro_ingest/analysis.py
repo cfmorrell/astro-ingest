@@ -72,6 +72,8 @@ class ScoreTarget:
     open: Callable[[], BinaryIO]
     src: str | None                  # source rel when this is a frame on the ASIAIR (gets a thumbnail)
     thumb_key: str | None            # cache key for its thumbnail
+    readable: bool = True            # False: no local copy (not staged, or its staged copy was cleared after
+                                     # filing); its stored stats still count, but it is never read over Wi-Fi
 
 
 def _nas_opener(cfg: Config, rel: str) -> Callable[[], BinaryIO]:
@@ -88,6 +90,7 @@ def targets_by_group(cfg: Config, source: Source, scan: Scan, index: NasIndex, p
     """{light group id: frames to score (its own frames, then NAS peers)} for groups with something to ingest."""
     entries = {f.rel: f.entry for f in scan.frames}
     items = {i.src: i for i in plan.items}
+    stored = QualityStore(cfg).frames
     out: dict[str, list[ScoreTarget]] = {}
     for g in plan.groups:
         if g.kind != "lights":
@@ -98,17 +101,20 @@ def targets_by_group(cfg: Config, source: Source, scan: Scan, index: NasIndex, p
         fast = getattr(source, "is_fast", lambda rel: True)  # staged, or a local folder: never score over Wi-Fi
         targets, names = [], set()
         for i in group_items:
-            if i.action in (P.EXCLUDED, P.SKIP, P.NOT_KEPT) or (i.action != P.ALREADY and not fast(i.src)):
-                continue  # not being ingested, or not staged yet
+            if i.action in (P.EXCLUDED, P.SKIP, P.NOT_KEPT):
+                continue  # not being ingested
             e = entries[i.src]
             name = i.src.rsplit("/", 1)[-1]
             names.add(name)
             skey = src_key(e.rel, e.size, e.mtime)
             if i.action == P.ALREADY and i.ingested_at:
                 nas_rel = i.ingested_at[0]
-                targets.append(ScoreTarget(nas_key(nas_rel, e.size), name, _nas_opener(cfg, nas_rel), i.src, skey))
+                # scored before it was filed? the same bytes: keep using those stats
+                key = skey if skey in stored else nas_key(nas_rel, e.size)
+                targets.append(ScoreTarget(key, name, _nas_opener(cfg, nas_rel), i.src, skey))
             else:
-                targets.append(ScoreTarget(skey, name, lambda rel=e.rel: source.open_read(rel), i.src, skey))
+                targets.append(ScoreTarget(skey, name, lambda rel=e.rel: source.open_read(rel), i.src, skey,
+                                           readable=fast(i.src)))
         for folder in g.dst_folders[:1]:  # peers: lights already in the destination session
             prefix = folder + "/"
             for name, files in sorted(index.files.items()):
@@ -124,8 +130,8 @@ def targets_by_group(cfg: Config, source: Source, scan: Scan, index: NasIndex, p
 def run_scoring(cfg: Config, targets: dict[str, list[ScoreTarget]], progress: Callable[[float, str], None]) -> dict:
     """Score (and thumbnail) every target not already in the store. Returns counts for the job result."""
     store = QualityStore(cfg)
-    todo = [t for ts in targets.values() for t in ts
-            if store.get(t.key) is None or (t.thumb_key and not render_path(cfg, t.thumb_key, THUMB_SIZE).is_file())]
+    todo = [t for ts in targets.values() for t in ts if t.readable and (
+            store.get(t.key) is None or (t.thumb_key and not render_path(cfg, t.thumb_key, THUMB_SIZE).is_file()))]
     done = failed = 0
     started = time.time()
     for n, t in enumerate(todo, 1):

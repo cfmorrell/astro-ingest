@@ -134,6 +134,13 @@ def replan(cfg: Config, planned: Planned, answers: dict[str, str] | None = None)
     return Planned(planned.scan, plan, planned.scanned_at, planned.index, planned.targets, planned.source, s)
 
 
+def reindex(cfg: Config, planned: Planned) -> Planned:
+    """After files were written to the share: rebuild the NAS index and plan again (no re-reading the source)."""
+    planned = Planned(planned.scan, planned.plan, planned.scanned_at, nas_index(cfg), planned.targets,
+                      planned.source, planned.sigma)
+    return replan(cfg, planned)
+
+
 def staged_source(cfg: Config, source: Source):
     """Wrap the device source so staged copies are read locally (see staging.py)."""
     from astro_ingest import staging

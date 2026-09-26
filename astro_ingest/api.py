@@ -57,7 +57,11 @@ def create_app(cfg: Config) -> FastAPI:
 
     def plan_json(p: service.Planned) -> dict:
         rate, rate_kind = service.transfer_rate(cfg)
-        staged = {i.src for i in p.plan.items if getattr(p.source, "staged", lambda r: False)(i.src)}
+        store = staging.StagingStore(cfg)
+        entries = {f.rel: f.entry for f in p.scan.frames}
+        slug = getattr(p.source, "slug", None)
+        staged = {i.src for i in p.plan.items if i.src in entries and slug and i.action in staging.STAGEABLE
+                  and not staging.needs_staging(store, slug, entries[i.src], i.action)}
         out = {**p.plan.to_dict(), "scanned_at": p.scanned_at.isoformat(timespec="seconds"), "sigma": p.sigma,
                "sigma_default": service.quality.INGEST_ANOMALY_Z_THRESHOLD, "rate_mb_s": rate, "rate_kind": rate_kind,
                "stageable_actions": list(staging.STAGEABLE)}
@@ -170,7 +174,9 @@ def create_app(cfg: Config) -> FastAPI:
         p = planned()
         src = p.source
         entries = {f.rel: f.entry for f in p.scan.frames}
-        todo = [entries[i.src] for i in p.plan.items if i.action in staging.STAGEABLE and i.src in entries]
+        store = staging.StagingStore(cfg)
+        todo = [entries[i.src] for i in p.plan.items
+                if i.src in entries and staging.needs_staging(store, src.slug, entries[i.src], i.action)]
 
         def work(progress) -> dict:
             result = staging.run_staging(cfg, src.source, src.slug, todo, measure_rate=not src.local,

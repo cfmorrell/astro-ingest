@@ -252,7 +252,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
         return 2
     src = planned.source
     entries = {f.rel: f.entry for f in planned.scan.frames}
-    todo = [entries[i.src] for i in planned.plan.items if i.action in staging.STAGEABLE and i.src in entries]
+    store = staging.StagingStore(cfg)
+    todo = [entries[i.src] for i in planned.plan.items
+            if i.src in entries and staging.needs_staging(store, src.slug, entries[i.src], i.action)]
     print(f"{len(todo)} file(s), {sum(e.size for e in todo) / 1e9:.2f} GB from {src.label} -> {cfg.staging_dir}/{src.slug}",
           flush=True)
     last = [-10.0]
