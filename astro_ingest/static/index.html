@@ -148,7 +148,30 @@
 
   <!-- ============ LATER PHASES ============ -->
   <section class="step-panel" data-step="copy">
-    <div class="card"><div class="card-title">Copy &amp; verify</div><p class="empty-hint">Arrives in phase 4b: copy from staging onto the NAS on approval, verify every file by size and checksum.</p></div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Copy onto the NAS and verify</div>
+        <div id="copy-status-badge" class="badge">loading</div>
+      </div>
+      <div id="copy-summary"></div>
+      <div id="copy-progress" class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
+      </div>
+      <div class="progress-wrap">
+        <button id="copy-run-btn" class="primary">Approve &amp; copy</button>
+      </div>
+      <div id="copy-result"></div>
+      <p class="hint">Copies each staged frame to its destination on the Astronomy share and checks it against the checksum taken when it was read from the device. Nothing is ever overwritten: a different file already at a destination is skipped and listed. A damaged NAS copy you chose to replace is moved to <code>_to_delete/</code> first. Staged copies are cleared as their NAS copies verify. Nothing on the device is touched.</p>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">Where it goes</div><div id="copy-dests-badge" class="badge"></div></div>
+      <div id="copy-dests"></div>
+    </div>
+    <div class="card" id="copy-notincluded-card" style="display:none;">
+      <div class="card-header"><div class="card-title">Not in this copy</div></div>
+      <div id="copy-notincluded"></div>
+    </div>
   </section>
   <section class="step-panel" data-step="file">
     <div class="card"><div class="card-title">File</div><p class="empty-hint">Arrives in phase 5: PROJECT_INFO, library reindex, new targets, index links.</p></div>

@@ -102,3 +102,27 @@ def test_resume_after_interruption(tmp_path):
     result = batch.run(cfg, batch_id, lambda *a, **k: None)
     assert result["already_there"] == 1 and result["copied"] == len([o for o in ops if o["kind"] == "copy"]) - 1
     assert not list(root.rglob("*.part"))
+
+
+def test_copy_through_the_api(tmp_path):
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from astro_ingest.api import create_app
+    cfg, air, root = make(tmp_path)
+    stage_and_score(cfg)
+    client = TestClient(create_app(cfg))
+    pv = client.get("/api/copy/preview").json()
+    assert pv["copies"] == 12 and pv["unfinished_batch"] is None and len(pv["destinations"]) == 2
+    run = client.post("/api/copy/run").json()
+    for _ in range(500):
+        snap = client.get(f"/jobs/{run['job_id']}").json()
+        if snap["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.02)
+    assert snap["status"] == "succeeded" and snap["result"]["copied"] == 12, snap
+    assert snap["stats"]["files_done"] == 12
+    assert client.get("/api/copy/preview").json()["copies"] == 0              # re-indexed: nothing left
+    assert client.post("/api/copy/run").status_code == 400
+    assert client.get("/api/batches").json()["batches"][0]["status"] == "done"

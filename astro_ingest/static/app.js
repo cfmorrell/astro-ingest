@@ -6,7 +6,7 @@
 
 const STEPS = ["connect", "scan", "stage", "review", "copy", "file", "clean"];
 const STEP_LABELS = { connect: "Connect", scan: "Scan", stage: "Stage", review: "Review", copy: "Copy & verify", file: "File", clean: "Clean up" };
-const STEP_PHASE = { copy: "4b", file: "5", clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
+const STEP_PHASE = { file: "5", clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
 const LARGE_GROUP_THRESHOLD = 20;  // beyond this, collapse to flagged frames +/- 2 neighbours (as astro-stacker)
 const SMALL_GROUP_PEERS = 10;      // fewer frames than this to compare against: scoring is less reliable (M42 04-11)
 const THUMB = 320;
@@ -40,6 +40,8 @@ const state = {
   health: null,
   devices: null,         // /api/devices: source mode, remembered device, last search
   collapsedDecisions: new Set(),  // decision ids Chris collapsed (this page view)
+  copyPreview: null,     // /api/copy/preview: what approving now would copy
+  lastBatch: null,       // the most recent copy batch
   plan: null,
   itemsBySrc: {},
   expandedGroups: {},    // strip id -> Set of "start-end" collapsed ranges the user expanded
@@ -414,6 +416,7 @@ function stepStatus(step) {
     case "scan": return { available: true, complete: planned };
     case "stage": return { available: planned, complete: planned && selectedItems().length > 0 && selectedItems().every((i) => i.staged) };
     case "review": return { available: planned, complete: planned && state.plan.summary.decisions_open === 0 };
+    case "copy": return { available: planned, complete: !!(state.copyPreview && state.copyPreview.copies === 0 && state.lastBatch && state.lastBatch.status === "done") };
     default: return { available: false, complete: false };
   }
 }
@@ -735,6 +738,103 @@ async function runStage() {
   }
 }
 
+// ---------- copy & verify ----------
+
+function renderCopy(live) {
+  const pv = state.copyPreview;
+  if (!pv) return;
+  const box = document.getElementById("copy-summary");
+  box.innerHTML = "";
+  let boxes;
+  if (live && live.files_total !== undefined) {
+    boxes = [[live.eta_s !== null ? clock(live.eta_s) : "estimating…", "time remaining", "ok"],
+      [`${live.files_done} / ${live.files_total}`, "files copied"],
+      [`${gb(live.bytes_done)} / ${gb(live.bytes_total)}`, "data copied"],
+      [live.mb_s ? `${live.mb_s} MB/s` : "…", "speed"]];
+  } else if (pv.unfinished_batch) {
+    boxes = [["resume", `batch ${pv.unfinished_batch} didn't finish`, "warn"], ["—", "files"], ["—", "data"], ["—", "speed"]];
+  } else {
+    const last = state.lastBatch && state.lastBatch.summary && state.lastBatch.summary.result;
+    boxes = [[pv.copies ? `~${clock(pv.bytes / 1e6 / 45)}` : "done", pv.copies ? "estimated at disk speed (~45 MB/s)" : "nothing left to copy", "ok"],
+      [String(pv.copies), "files to copy"], [gb(pv.bytes), "to copy"],
+      [last && last.seconds ? `${(last.bytes / 1e6 / last.seconds).toFixed(1)} MB/s` : "—", "last copy speed"]];
+  }
+  box.appendChild(el("div", { class: "stat-row" }, boxes.map(([n, l, k]) => stat(n, l, k))));
+  const prog = document.getElementById("copy-progress");
+  if (!live) {
+    const done = !pv.copies && state.lastBatch && state.lastBatch.status === "done";
+    prog.querySelector(".progress-fill").style.width = done ? "100%" : "0%";
+    prog.querySelector(".pct").textContent = done ? "100%" : "0%";
+    prog.querySelector(".msg").textContent = pv.copies ? "waiting for your approval" : (done ? "last batch copied and verified" : "");
+  }
+  const btn = document.getElementById("copy-run-btn");
+  btn.textContent = live ? "Copying…" : pv.unfinished_batch ? "Resume copy" : pv.copies ? `Approve & copy ${pv.copies} file${pv.copies === 1 ? "" : "s"}` : "Nothing to copy";
+  if (!state.copyRunning) btn.disabled = !pv.copies && !pv.unfinished_batch;
+  setStepBadge("copy-status-badge", live ? "accent" : pv.copies ? "" : "ok", live ? "copying…" : pv.unfinished_batch ? "interrupted" : pv.copies ? "awaiting approval" : "up to date");
+
+  const dests = document.getElementById("copy-dests");
+  dests.innerHTML = "";
+  setStepBadge("copy-dests-badge", "", `${pv.destinations.length} destination${pv.destinations.length === 1 ? "" : "s"}`);
+  if (!pv.destinations.length) dests.appendChild(el("div", { class: "empty-hint" }, ["Nothing is ready to copy."]));
+  pv.destinations.forEach((d) => dests.appendChild(el("div", { class: "night-block", style: "display:flex; gap:10px; align-items:center;" }, [
+    el("span", { class: "badge accent" }, [`${d.files} file${d.files === 1 ? "" : "s"}`]),
+    el("span", { class: "session-path" }, [d.folder]),
+    el("span", { class: "hint", style: "margin:0 0 0 auto;" }, [gb(d.bytes)]),
+  ])));
+  if (pv.retires) dests.appendChild(el("div", { class: "session-mismatch-warning" }, [`⚠ ${pv.retires} damaged NAS cop${pv.retires === 1 ? "y is" : "ies are"} moved to _to_delete/ first`]));
+
+  const ni = document.getElementById("copy-notincluded");
+  ni.innerHTML = "";
+  document.getElementById("copy-notincluded-card").style.display = pv.not_included.length ? "block" : "none";
+  pv.not_included.forEach((r) => ni.appendChild(el("div", { class: "night-block" }, [
+    el("div", {}, [el("span", { class: "badge warn" }, [`${r.count}`]), " ", r.reason]),
+    toggleList(`show ${r.count} file${r.count === 1 ? "" : "s"}`, r.items.map((src) => el("div", {}, [src]))),
+  ])));
+}
+
+function renderCopyResult(res) {
+  const box = document.getElementById("copy-result");
+  box.innerHTML = "";
+  if (!res) return;
+  box.appendChild(el("div", { class: "hint" }, [
+    `Batch ${res.batch}: ${res.copied} copied and verified, ${res.already_there} already there, ${res.clashes.length} clash${res.clashes.length === 1 ? "" : "es"}, ${res.failed.length} failed, in ${clock(res.seconds)}; ${gb(res.staging_cleared_bytes)} cleared from staging. Log: ${res.log}`,
+  ]));
+  res.count_problems.forEach((c) => box.appendChild(el("div", { class: "error-banner" }, [`✕ file count mismatch: ${c}`])));
+  const list = (label, rows, cls) => rows.length && box.appendChild(el("div", { class: cls }, [`${label}:`, ...rows.map((r) => el("div", { class: "session-path" }, [`${r.dst} — ${r.detail}`]))]));
+  list("Failed", res.failed, "error-banner");
+  list("Not overwritten (a different file is already there)", res.clashes, "session-mismatch-warning");
+  list("Damaged NAS copies", res.retired, "hint");
+}
+
+async function watchCopyJob(jobId) {
+  const btn = document.getElementById("copy-run-btn");
+  state.copyRunning = true;
+  btn.disabled = true;
+  await pollJob(jobId, document.getElementById("copy-progress"), async (snap) => {
+    state.copyRunning = false;
+    if (snap.status === "succeeded") renderCopyResult(snap.result);
+    else {
+      document.getElementById("copy-result").innerHTML = "";
+      document.getElementById("copy-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "copy failed"]));
+    }
+    await loadPlan(false);
+  }, (snap) => renderCopy(snap.stats));
+}
+
+async function runCopy() {
+  const pv = state.copyPreview;
+  const what = pv.unfinished_batch ? `Resume the interrupted batch ${pv.unfinished_batch}?`
+    : `Copy ${pv.copies} file${pv.copies === 1 ? "" : "s"} (${gb(pv.bytes)}) onto the NAS into ${pv.destinations.length} folder${pv.destinations.length === 1 ? "" : "s"}${pv.retires ? `, retiring ${pv.retires} damaged cop${pv.retires === 1 ? "y" : "ies"} to _to_delete/ first` : ""}? Nothing is overwritten and nothing on the device is touched.`;
+  if (!confirm(what)) return;
+  try {
+    const { job_id } = await api("POST", "/api/copy/run");
+    await watchCopyJob(job_id);
+  } catch (e) {
+    document.getElementById("copy-result").innerHTML = "";
+    document.getElementById("copy-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+  }
+}
+
 // ---------- review ----------
 
 function renderReview() {
@@ -997,6 +1097,8 @@ async function resumeRunningJob() {
     const jobsNow = (await api("GET", "/jobs")).jobs;
     const stage = jobsNow.find((j) => j.kind === "stage" && j.status === "running");
     if (stage) { state.activeStep = "stage"; showActiveStep(); await watchStageJob(stage.id); }
+    const copying = jobsNow.find((j) => j.kind === "copy" && j.status === "running");
+    if (copying) { state.activeStep = "copy"; showActiveStep(); await watchCopyJob(copying.id); }
     const running = jobsNow.find((j) => j.kind === "quality" && j.status === "running");
     if (running) await watchQualityJob(running.id);
   } catch (e) { /* ignore */ }
@@ -1038,7 +1140,11 @@ async function loadPlan(refresh) {
   setStepBadge("review-status-badge", "", refresh ? "scanning…" : "loading…");
   try {
     if (refresh) await api("POST", "/api/scan");
-    applyPlan(await api("GET", "/api/plan"));
+    const [plan, preview, batches] = await Promise.all([api("GET", "/api/plan"), api("GET", "/api/copy/preview"), api("GET", "/api/batches")]);
+    state.copyPreview = preview;
+    state.lastBatch = batches.batches[0] || null;
+    applyPlan(plan);
+    if (!state.copyRunning) renderCopy();
   } catch (e) {
     state.plan = null;
     setStepBadge("review-status-badge", "danger", "error");
@@ -1058,6 +1164,7 @@ document.getElementById("connect-next-btn").addEventListener("click", () => { st
 document.getElementById("select-next-btn").addEventListener("click", () => { state.activeStep = "stage"; showActiveStep(); });
 document.getElementById("stage-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
+document.getElementById("copy-run-btn").addEventListener("click", runCopy);
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
 document.getElementById("find-btn").addEventListener("click", () => findDevices(false));

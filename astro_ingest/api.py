@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from astro_ingest import analysis, jobs, service, staging, state
+from astro_ingest import analysis, batch, db, jobs, service, staging, state
 from astro_ingest.sources import devices, discover
 from astro_ingest.config import VERSION, Config
 from astro_ingest.core import imaging
@@ -191,6 +191,44 @@ def create_app(cfg: Config) -> FastAPI:
 
         job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="stage")
         return {"job_id": job.id, "files": len(todo), "bytes": sum(e.size for e in todo)}
+
+    # ---------------- copy & verify: staging -> the share (the only step that writes there)
+
+    def preview_json(pv) -> dict:
+        reasons = {}
+        for n in pv.not_included:
+            reasons.setdefault(n["reason"], []).append(n["src"])
+        return pv.summary() | {"not_included": [{"reason": r, "count": len(v), "items": v} for r, v in reasons.items()],
+                               "unfinished_batch": db.unfinished_batch(cfg)}
+
+    @app.get("/api/copy/preview")
+    def copy_preview():
+        return preview_json(batch.preview(planned()))
+
+    @app.post("/api/copy/run")
+    def copy_run():
+        if jobs.running("copy") or jobs.running("stage"):
+            raise HTTPException(409, "a copy or staging run is already in progress")
+        batch_id = db.unfinished_batch(cfg)       # resume an interrupted batch before approving a new one
+        if batch_id is None:
+            p = planned()
+            pv = batch.preview(p)
+            if not pv.copy_ops:
+                raise HTTPException(400, "nothing is ready to copy")
+            batch_id = batch.approve(cfg, p, pv)
+
+        def work(progress) -> dict:
+            result = batch.run(cfg, batch_id, progress)
+            with lock:
+                cache["plan"] = service.reindex(cfg, planned())
+            return result
+
+        job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="copy")
+        return {"job_id": job.id, "batch_id": batch_id}
+
+    @app.get("/api/batches")
+    def list_batches():
+        return {"batches": db.batches(cfg)}
 
     # ---------------- previews (astro-stacker's rendering, cached in CACHE_DIR)
 

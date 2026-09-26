@@ -205,6 +205,9 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    live Wi-Fi estimate. Stage: each selected frame read once into `STAGING_DIR` (BLAKE2b, `.part` → rename,
    re-verified), resumable, then scored from the staged copies. Real ASIAIR: 10 flats (522 MB) staged at 9.1 MB/s,
    `b2sum`-verified, device listing unchanged.
+4b. **Copy & verify (done 2026-09-26).** Sandbox run on the Splinter 06-15 test session: 74 files (3.86 GB) copied
+   and verified in ~1 min at 50 MB/s, 0 clashes/failures; all 74 match their staging hashes by independent `b2sum`;
+   64 lights + 10 flats; staging cleared (4.54 GB); a second approval copies nothing.
 4. **Copy and verify into the sandbox** (now from staging, at disk speed). `fsops`, `jobs`, the op log, approval, and progress. Checksum
    already-ingested items against `ASTRO_NAS`. Test resume-after-kill and source drop mid-copy. Confirm the
    no-clobber rename on shfs.

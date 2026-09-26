@@ -51,7 +51,8 @@ so tell Chris.
 15. **Temperature suffix** = the batch's mean CCD-TEMP, rounded; none when it rounds to -10 °C.
 16. **Damaged NAS copies:** when the NAS copy of a frame is damaged (e.g. truncated) and the ASIAIR has a good one,
     use the better copy: default answer is *replace* (retire the bad NAS copy to `_to_delete/`, then copy).
-    Answers to plan decisions live in `STATE_DIR/answers.json` until Phase 4 moves them to SQLite.
+    Answers to plan decisions, per-frame keep/reject/exclude choices and the sensitivity live in
+    `STATE_DIR/answers.json` (kept as JSON on purpose: readable by Claude sessions).
 17. **Frame-quality screening before ingest** (Phase 2b). Every light frame is scored against its group (the other
     frames of that night/object/camera/scope/filter, plus lights already in the destination session on the NAS)
     with astro-stacker's method: star count, FWHM, eccentricity, SNR, sky background; robust MAD z-scores.
@@ -70,6 +71,12 @@ so tell Chris.
     thumbnails per set; Chris can leave out frames or whole sets, with a live rough Wi-Fi time estimate
     (assumed 10 MB/s until a staging run measures the real rate).
 20. **Left out on Select** → never read; offered for deletion on Clean-up, called out ("left out by you").
+21. **Copy & verify (phase 4b):** one approval copies everything that's ready (staged, no open decision); the batch
+    is a snapshot of exact operations in `STATE_DIR/ingest.sqlite3` plus `batches/<id>.tsv` and `logs/copy-<id>.log`.
+    `fsops.py` is the only writer to the share: `.part` → fsync → hash must match the staging hash → no-clobber
+    rename (hard link); identical file already there = fine, anything else = clash, never overwritten; damaged
+    copies retired to `_to_delete/`; single writer via `STATE_DIR/ingest.lock`. Staged copies are cleared as soon
+    as their NAS copies verify (rejected/left-out ones when the batch ends); scores and "already read" survive that.
 
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",

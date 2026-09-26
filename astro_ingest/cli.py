@@ -277,6 +277,50 @@ def cmd_stage(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_copy(args: argparse.Namespace) -> int:
+    """Show what Copy & verify would do; with --yes, approve and run it (staging -> the share)."""
+    from astro_ingest import batch, db
+    from astro_ingest.service import SourceUnavailable, open_source, scan_and_plan
+    cfg = load_config()
+    if cfg is None:
+        return 2
+    batch_id = db.unfinished_batch(cfg)
+    if batch_id is None:
+        try:
+            planned = scan_and_plan(cfg, open_source(cfg, args.source))
+        except SourceUnavailable as e:
+            print(f"copy: {e}", file=sys.stderr)
+            return 2
+        pv = batch.preview(planned)
+        sm = pv.summary()
+        print(f"Ready to copy: {sm['copies']} file(s), {_gb(sm['bytes']).strip()} into {cfg.astro_root}")
+        for d in pv.destinations:
+            print(f"  {d['files']:4d} files {_gb(d['bytes'])}  {d['folder']}")
+        if sm["retires"]:
+            print(f"  {sm['retires']} damaged NAS copy(ies) retired to _to_delete/ first")
+        if pv.not_included:
+            print(f"Not in this copy: {len(pv.not_included)} file(s) (open decisions or not staged)")
+        if not args.yes or not pv.copy_ops:
+            print("Nothing copied. Run again with --yes to approve and copy." if pv.copy_ops else "Nothing to copy.")
+            return 0
+        batch_id = batch.approve(cfg, planned, pv)
+    else:
+        print(f"Resuming unfinished batch {batch_id}")
+    last = [-10.0]
+
+    def progress(pct: float, msg: str, **stats) -> None:
+        if pct - last[0] >= 10 or pct >= 100:
+            print(f"[{pct:5.1f}%] {msg}", flush=True)
+            last[0] = pct
+
+    result = batch.run(cfg, batch_id, progress)
+    print({k: v for k, v in result.items() if k not in ("clashes", "failed", "retired")})
+    for k in ("clashes", "failed", "retired"):
+        for r in result[k]:
+            print(f"  {k}: {r['dst']}: {r['detail']}")
+    return 0 if not result["failed"] and not result["count_problems"] else 1
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -320,6 +364,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--source", help="local directory, 'smb' or smb://host/share (default: as configured)")
     p.add_argument("--no-score", action="store_true", help="stage only")
     p.set_defaults(func=cmd_stage)
+
+    p = sub.add_parser("copy", help="copy approved frames from staging onto the share, verified")
+    p.add_argument("--source", help="local directory, 'smb' or smb://host/share (default: as configured)")
+    p.add_argument("--yes", action="store_true", help="approve and run (without it, only show what would happen)")
+    p.set_defaults(func=cmd_copy)
 
     p = sub.add_parser("serve", help="run the web app")
     p.add_argument("--host", default="0.0.0.0")
