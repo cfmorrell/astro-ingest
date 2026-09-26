@@ -58,6 +58,10 @@ so tell Chris.
     **Flagged frames are not ingested by default** (red border); one click keeps any of them. Default sensitivity
     **σ 4.0** (stacker uses 3.0; Chris chose 4.0 after it caught all 17 dawn frames he had rejected by hand).
     Rejected frames go on the Clean-up screen as "rejected for quality", called out, deleted only with approval.
+18. **Previews the astro-stacker way:** rendered from the FITS with stacker's stretch (lights unlinked + debayer,
+    flats `calibration`, darks/bias `noise`), 320 px cards and a 1600 px lightbox. The ASIAIR's `_thn.jpg` is
+    not used for display. `core/imaging.py` and `core/quality.py` are ports of stacker's `app/imaging.py` and
+    `app/framestats.py` (commit f31cbcb): keep them in step with stacker.
 19. **Select → Stage (phase 4a).** Reads over the ASIAIR's Wi-Fi run ~9–10 MB/s (it stays on Wi-Fi), so each new
     frame is **read from the device exactly once**, into `STAGING_DIR` (a separate UnRAID share in production,
     outside the Astronomy share; dev default `$ASTRO_ROOT/_staging`), checksummed (BLAKE2b) on the way in and
@@ -66,10 +70,6 @@ so tell Chris.
     thumbnails per set; Chris can leave out frames or whole sets, with a live rough Wi-Fi time estimate
     (assumed 10 MB/s until a staging run measures the real rate).
 20. **Left out on Select** → never read; offered for deletion on Clean-up, called out ("left out by you").
-18. **Previews the astro-stacker way:** rendered from the FITS with stacker's stretch (lights unlinked + debayer,
-    flats `calibration`, darks/bias `noise`), 320 px cards and a 1600 px lightbox. The ASIAIR's `_thn.jpg` is
-    not used for display. `core/imaging.py` and `core/quality.py` are ports of stacker's `app/imaging.py` and
-    `app/framestats.py` (commit f31cbcb): keep them in step with stacker.
 
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
