@@ -98,7 +98,8 @@ def print_plan(plan: P.Plan, out=sys.stdout) -> None:
         if s.exists and not (s.lights or s.flats):
             continue
         status = "NEW TARGET" if s.new_target else ("new" if not s.exists else "exists")
-        w(f"  {status:10} {s.rel}  +{s.lights} lights +{s.flats} flats  {_gb(s.bytes).strip()}")
+        replaced = f" ({s.replaced} replacing damaged copies)" if s.replaced else ""
+        w(f"  {status:10} {s.rel}  +{s.lights} lights{replaced} +{s.flats} flats  {_gb(s.bytes).strip()}")
         for warning in s.warnings:
             w(f"             ! {warning}")
     untouched = sum(1 for s in plan.sessions if s.exists and not (s.lights or s.flats))
@@ -130,7 +131,7 @@ def print_plan(plan: P.Plan, out=sys.stdout) -> None:
         w(f"  {v['files']:5d} files {_gb(v['bytes'])}  {labels.get(key, key)}")
     callouts = [i for i in plan.items if i.cleanup == "callout"]
     for i in callouts:
-        w(f"        {i.action:13} {i.src}")
+        w(f"        {i.action:13} {i.src}  ({i.reason})")
 
 
 def load_config() -> Config | None:

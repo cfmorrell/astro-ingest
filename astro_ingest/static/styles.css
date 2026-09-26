@@ -1317,3 +1317,21 @@ button.danger-outline:hover {
   color: var(--text-dim);
   margin-left: 2px;
 }
+
+.decision.compact {
+  padding: 6px 12px;
+}
+
+.decision.compact .decision-question {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 4px 0 6px;
+}
+
+.decision.compact .checklist {
+  margin-bottom: 4px;
+}
+
+.file-list .reason {
+  color: var(--text-dim);
+}

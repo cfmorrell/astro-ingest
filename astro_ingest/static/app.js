@@ -98,8 +98,22 @@ function toggleList(label, rows) {
   return el("div", {}, [link, list]);
 }
 
-function itemRow(item) {
-  return el("div", {}, [el("span", { class: "act" }, [ACTION_LABELS[item.action] || item.action]), item.src]);
+function actionLabel(item) {
+  return item.retire && item.retire.length ? "replace damaged copy" : (ACTION_LABELS[item.action] || item.action);
+}
+
+function itemRow(item, withReason) {
+  return el("div", { title: item.reason || "" }, [
+    el("span", { class: "act" }, [actionLabel(item)]),
+    item.src,
+    withReason && item.reason ? el("span", { class: "reason" }, [`  (${item.reason})`]) : null,
+  ]);
+}
+
+function frameLabel(src) {
+  // "…_20260915-052048_185deg_-10.0C_0103.fit" -> "09-15 05:20 · #0103" (the unique part of an ASIAIR name)
+  const m = basename(src).match(/_(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}_.*?_(\d{4})\.fit$/);
+  return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]} · #${m[6]}` : basename(src);
 }
 
 // ---------- lightbox (stacker markup, simplified: no frame navigation yet) ----------
@@ -131,7 +145,10 @@ function thumbStrip(items, max) {
     const url = `/api/thumb?rel=${encodeURIComponent(i.thumb)}`;
     strip.appendChild(el("div", { class: "frame-card" }, [
       el("img", { src: url, loading: "lazy", alt: basename(i.src), onclick: () => openLightbox(url, basename(i.src)) }, []),
-      el("div", { class: "frame-meta" }, [el("div", { class: "frame-name", title: i.src }, [basename(i.src)])]),
+      el("div", { class: "frame-meta" }, [
+        el("div", { class: "frame-time", title: i.src }, [frameLabel(i.src)]),
+        el("div", { class: "frame-name", title: i.src }, [actionLabel(i)]),
+      ]),
     ]));
   });
   if (withThumbs.length > max) {
@@ -252,14 +269,20 @@ function renderDecisions(p) {
   const rank = (d) => (d.answer !== null ? 2 : d.resolved === null ? 0 : 1);
   [...p.decisions].sort((a, b) => rank(a) - rank(b)).forEach((d) => {
     const cls = d.answer !== null ? "answered" : d.resolved === null ? "" : "defaulted";
+    // A new-target answer carries the folder Chris chose ("new:NeedleGalaxy-NGC4565"), which differs from the
+    // proposal in the option ("new:NGC4565"): match on the "new:" prefix and show the chosen name.
+    const isChosen = (o) => o.value === d.resolved ||
+      (o.value.startsWith("new:") && d.resolved !== null && d.resolved.startsWith("new:"));
+    const newName = (o) => (isChosen(o) && d.resolved.startsWith("new:") ? d.resolved : o.value).slice(4);
     const chips = el("div", { class: "checklist" }, d.options.map((o) => el("label", {
-      class: `chip${o.value === d.resolved ? " checked" : ""}`,
+      class: `chip${isChosen(o) ? " checked" : ""}`,
     }, [
-      el("input", Object.assign({ type: "radio", name: d.id, disabled: "disabled" }, o.value === d.resolved ? { checked: "checked" } : {}), []),
-      o.label + (o.value && o.value.startsWith("new:") && o.value.length > 4 ? ` (${o.value.slice(4)})` : ""),
+      el("input", Object.assign({ type: "radio", name: d.id, disabled: "disabled" }, isChosen(o) ? { checked: "checked" } : {}), []),
+      o.label + (o.value.startsWith("new:") && newName(o) ? ` (${newName(o)})` : ""),
     ])));
     const files = d.items.map((src) => itemsBySrc[src]).filter(Boolean);
-    list.appendChild(el("div", { class: `decision ${cls}` }, [
+    const open = d.resolved === null;
+    list.appendChild(el("div", { class: `decision ${cls}${open ? "" : " compact"}` }, [
       el("div", {}, [
         el("span", { class: `badge ${d.resolved === null ? "warn" : "accent"}` }, [d.kind]),
         " ",
@@ -267,8 +290,8 @@ function renderDecisions(p) {
       ]),
       el("div", { class: "decision-question" }, [d.question]),
       chips,
-      thumbStrip(files, 6),
-      files.length ? toggleList(`show ${files.length} file${files.length === 1 ? "" : "s"}`, files.map(itemRow)) : null,
+      open ? thumbStrip(files, 6) : null,
+      files.length ? toggleList(`show ${files.length} file${files.length === 1 ? "" : "s"}`, files.map((i) => itemRow(i))) : null,
     ]));
   });
 }
@@ -290,13 +313,13 @@ function renderSessions(p) {
         el("span", { class: "session-path" }, [sess.rel]),
       ]),
       el("div", { class: "session-meta" }, [
-        `+${sess.lights} lights · +${sess.flats} flats · ${gb(sess.bytes)}`,
+        `+${sess.lights} lights${sess.replaced ? ` (${sess.replaced} replacing damaged copies)` : ""} · +${sess.flats} flats · ${gb(sess.bytes)}`,
         sess.siblings.length ? ` · sibling nights: ${sess.siblings.join(", ")}` : "",
       ]),
       ...sess.warnings.map((w) => el("div", { class: "session-mismatch-warning" }, [`⚠ ${w}`])),
       thumbStrip(items.filter((i) => i.kind === "Light"), 8),
       toggleList(`show ${items.length} file${items.length === 1 ? "" : "s"} and destinations`,
-        items.map((i) => el("div", {}, [el("span", { class: "act" }, [ACTION_LABELS[i.action]]), `${basename(i.src)}  →  ${i.dsts.filter((d) => d.startsWith(prefix)).join(", ")}`]))),
+        items.map((i) => el("div", { title: i.reason || "" }, [el("span", { class: "act" }, [actionLabel(i)]), `${basename(i.src)}  →  ${i.dsts.filter((d) => d.startsWith(prefix)).join(", ")}`]))),
     ]));
   });
   if (quiet.length) {
@@ -324,7 +347,7 @@ function renderLibrary(p) {
         el("span", { class: "badge ok" }, ["new batch"]), el("span", { class: "session-path" }, [folder]),
       ]),
       el("div", { class: "session-meta" }, [`${byFolder[folder].length} frames · ${gb(byFolder[folder].reduce((a, i) => a + i.size, 0))}`]),
-      toggleList("show files", byFolder[folder].map(itemRow)),
+      toggleList("show files", byFolder[folder].map((i) => itemRow(i))),
     ]));
   });
 }
@@ -344,7 +367,7 @@ function renderCleanup(p) {
       ]),
     ]);
     // Anything that isn't a plain verified frame is listed by name (Chris: call out everything unusual)
-    if (key !== "after-verify") block.appendChild(toggleList(`show ${items.length} item${items.length === 1 ? "" : "s"}`, items.map(itemRow)));
+    if (key !== "after-verify") block.appendChild(toggleList(`show ${items.length} item${items.length === 1 ? "" : "s"}`, items.map((i) => itemRow(i, key === "callout" || key === "blocked"))));
     box.appendChild(block);
   });
   box.appendChild(el("p", { class: "hint" }, ["Every frame's _thn.jpg thumbnail goes with it; file counts include them."]));

@@ -103,6 +103,7 @@ class PlannedSession:
     new_target: bool = False
     groups: list[str] = field(default_factory=list)
     lights: int = 0            # light frames this plan will copy there
+    replaced: int = 0          # of those, frames that replace a damaged copy already there
     flats: int = 0             # flat / dark-flat frames this plan will copy there
     bytes: int = 0
     siblings: list[str] = field(default_factory=list)
@@ -493,6 +494,7 @@ class _Planner:
                 status[rel].reason = f"new session {session.rel}" if not session.exists else ""
         copied = [it for it in status.values() if it.action in (COPY, APPEND)]
         session.lights += len(copied)
+        session.replaced += sum(1 for it in copied if it.retire)
         session.bytes += sum(it.size for it in copied)
 
     def site_warnings(self, g: Group, fs: list[SourceFrame]) -> None:
