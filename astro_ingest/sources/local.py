@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
-from astro_ingest.sources.base import SourceEntry
+from astro_ingest.sources.base import SourceEntry, check_deletable, check_removable_dir
 
 
 class LocalDirSource:
@@ -26,6 +26,27 @@ class LocalDirSource:
 
     def open_read(self, rel: str) -> BinaryIO:
         return open(self._path(rel), "rb")
+
+    def stat(self, rel: str) -> SourceEntry | None:
+        path = self._path(rel)
+        if not path.is_file() or path.is_symlink():
+            return None
+        st = path.lstat()
+        return SourceEntry(rel, st.st_size, st.st_mtime)
+
+    def delete(self, rel: str) -> None:
+        check_deletable(rel)
+        os.remove(self._path(rel))
+
+    def rmdir(self, rel: str) -> None:
+        check_removable_dir(rel)
+        os.rmdir(self._path(rel))
+
+    def listdir(self, rel: str) -> list[str]:
+        try:
+            return sorted(os.listdir(self._path(rel)))
+        except FileNotFoundError:
+            return []
 
     def _path(self, rel: str) -> Path:
         path = (self.root / rel).resolve()

@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 from typing import BinaryIO, Iterator
 
-from astro_ingest.sources.base import SourceEntry
+from astro_ingest.sources.base import SourceEntry, check_deletable, check_removable_dir
 
 _config_lock = threading.Lock()
 _configured = False
@@ -68,6 +68,31 @@ class SmbSource:
         import smbclient
         # share_access "rw": never lock a file the device itself might be writing or reading
         return smbclient.open_file(self._path(rel), mode="rb", share_access="rw", connection_cache=self._cache)
+
+    def stat(self, rel: str) -> SourceEntry | None:
+        import smbclient
+        try:
+            st = smbclient.stat(self._path(rel), connection_cache=self._cache)
+        except FileNotFoundError:
+            return None
+        return SourceEntry(rel, st.st_size, st.st_mtime)
+
+    def delete(self, rel: str) -> None:
+        import smbclient
+        check_deletable(rel)
+        smbclient.remove(self._path(rel), connection_cache=self._cache)
+
+    def rmdir(self, rel: str) -> None:
+        import smbclient
+        check_removable_dir(rel)
+        smbclient.rmdir(self._path(rel), connection_cache=self._cache)
+
+    def listdir(self, rel: str) -> list[str]:
+        import smbclient
+        try:
+            return sorted(smbclient.listdir(self._path(rel), connection_cache=self._cache))
+        except FileNotFoundError:
+            return []
 
     def close(self) -> None:
         import smbclient

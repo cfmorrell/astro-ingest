@@ -80,7 +80,7 @@ def preview(planned) -> Preview:
         for f in b["files"]:
             if f["from"] != "nas":
                 continue   # flats from this device: already an extra destination of their item above
-            path = _nas_path(src.cfg, f["src"]) if hasattr(src, "cfg") else None
+            path = fsops.nas_path(src.cfg, f["src"]) if hasattr(src, "cfg") else None
             if path is None:
                 not_included.append({"src": f"nas:{f['src']}", "reason": "borrowed flat not found on the NAS"})
                 continue
@@ -90,14 +90,6 @@ def preview(planned) -> Preview:
     destinations = [{"folder": k, "files": len(v), "bytes": sum(v)} for k, v in sorted(per_dest.items())]
     return Preview(ops, destinations, not_included, clear_after, borrowed)
 
-
-def _nas_path(cfg: Config, rel: str) -> Path | None:
-    """A NAS file to copy from (dev: the sandbox first, then the read-only live share)."""
-    for root in (Path(cfg.astro_root), Path(cfg.astro_nas)):
-        p = root / rel
-        if p.is_file() and not p.is_symlink():
-            return p
-    return None
 
 
 def approve(cfg: Config, planned, pv: Preview) -> str:

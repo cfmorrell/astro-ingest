@@ -195,6 +195,19 @@ class StagedSource:
             return open(self.store.staged_path(self.slug, rel), "rb")
         return self.source.open_read(rel)
 
+    # Clean up talks to the device itself, never to staging
+    def stat(self, rel: str):
+        return self.source.stat(rel)
+
+    def delete(self, rel: str) -> None:
+        self.source.delete(rel)
+
+    def rmdir(self, rel: str) -> None:
+        self.source.rmdir(rel)
+
+    def listdir(self, rel: str) -> list[str]:
+        return self.source.listdir(rel)
+
 
 def needs_staging(store: StagingStore, slug: str, entry: SourceEntry, action: str) -> bool:
     """Does the Stage step have to read this frame (again)?

@@ -38,6 +38,9 @@ class Config:
     cache_dir: Path  # disposable renders (thumbnails, lightbox previews); default STATE_DIR/cache
     staging_dir: Path  # one full read of each selected frame from the device; production: a separate UnRAID share
     assumed_wifi_mb_s: float  # transfer-time estimate until a staging run has measured the real rate
+    # Clean up may delete from a real device (SMB) only when this is set. Off in dev (Chris, 2026-09-26: backups of
+    # the ASIAIR and the NAS first); a local-folder source (the scratch copy) can always be cleaned up.
+    allow_device_delete: bool = False
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
@@ -77,6 +80,7 @@ class Config:
             # things working without it; "_" never matches a target folder.
             staging_dir=Path(optional("STAGING_DIR") or Path(env["ASTRO_ROOT"].strip()) / "_staging"),
             assumed_wifi_mb_s=_positive_float(optional("ASSUMED_WIFI_MB_S"), 10.0),
+            allow_device_delete=(optional("ALLOW_DEVICE_DELETE") or "0") == "1",
         )
 
     def check_writable(self, path: str | os.PathLike) -> Path:

@@ -94,6 +94,15 @@ def hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def nas_path(cfg: Config, rel: str) -> Path | None:
+    """Where a NAS file is (dev: the sandbox first, then the read-only live share), or None. Never a symlink."""
+    for root in (Path(cfg.astro_root), Path(cfg.astro_nas)):
+        p = root / rel
+        if p.is_file() and not p.is_symlink():
+            return p
+    return None
+
+
 def count_files(folder: Path) -> int:
     """Regular files directly in `folder` (ignoring .part leftovers), 0 if it doesn't exist."""
     try:
