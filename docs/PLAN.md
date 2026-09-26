@@ -184,6 +184,11 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    - two new-target proposals
    - the `120 Seconds/2026-04-28` darks
    - 05-16 and 06-24 flats as `calib-without-lights`
+2b. **Previews and frame-quality screening (done 2026-09-25).** Ports of astro-stacker's `app/imaging.py` and
+   `app/framestats.py`; frames scored against their group (plus NAS peers) in a background job (stacker-shaped
+   `/jobs`), stats in `STATE_DIR/quality.json`, renders in `CACHE_DIR`. Flagged lights are `rejected` by default
+   (σ 4.0), keepable per frame; stacker-style cards, lightbox and metric strips. Checked against Chris's own
+   hand-rejections: all 17 dawn frames from ET 09-14 / Heart 09-15 flagged at σ 4.0.
 3. **ASIAIR discovery and SmbSource (read-only against the real device).** Build `discover.py` and `smb.py`, plus the
    dashboard status and Find button. Test with a fake network in unit tests. Against the live ASIAIR, only list and
    read. Check SMB throughput and reconnect behavior.

@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from fitsgen import asiair_frame
+from fitsgen import asiair_frame, star_field
 
 from astro_ingest.api import create_app
 from astro_ingest.config import VERSION, Config
@@ -14,7 +14,7 @@ def make_app(tmp_path, with_source=True):
     if with_source:
         for i in range(4):
             asiair_frame(air, "Plan/Light/SoulNebula", "Light", f"20260923-21{i}420", obj="SoulNebula", angle=3,
-                         seq=i + 1)
+                         seq=i + 1, data=star_field(seed=i))
     cfg = Config.from_env({"ASTRO_ROOT": str(root), "ASTRO_NAS": str(nas), "STATE_DIR": str(root / "state"),
                            "TZ": "America/New_York", "ASIAIR_ROOT": str(air)})
     return TestClient(create_app(cfg)), air, root
@@ -39,16 +39,42 @@ def test_plan_and_rescan(tmp_path):
     assert client.post("/api/scan").json()["summary"]["copy_files"] == 5
 
 
-def test_thumbnails_only(tmp_path):
-    client, air, _ = make_app(tmp_path)
+def test_previews(tmp_path):
+    client, air, root = make_app(tmp_path)
+    rel = next(air.rglob("*.fit")).relative_to(air).as_posix()
+    r = client.get("/api/preview", params={"rel": rel, "size": 320})
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    assert list((root / "state" / "cache" / "previews").glob("*-320.png"))   # cached in CACHE_DIR
+    assert client.get("/api/preview", params={"rel": rel, "size": 123}).status_code == 400
+    assert client.get("/api/preview", params={"rel": "../x.fit"}).status_code == 400
+    assert client.get("/api/preview", params={"rel": "Plan/missing.fit"}).status_code == 404
     thumb = next(air.rglob("*_thn.jpg")).relative_to(air).as_posix()
-    r = client.get("/api/thumb", params={"rel": thumb})
-    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
-    fit = thumb.replace("_thn.jpg", ".fit")
-    assert client.get("/api/thumb", params={"rel": fit}).status_code == 400
-    assert client.get("/api/thumb", params={"rel": "../x_thn.jpg"}).status_code == 400
-    assert client.get("/api/thumb", params={"rel": "/etc/x_thn.jpg"}).status_code == 400
-    assert client.get("/api/thumb", params={"rel": "Plan/missing_thn.jpg"}).status_code == 404
+    assert client.get("/api/preview", params={"rel": thumb}).status_code == 404   # not a frame
+
+
+def test_answers_endpoint(tmp_path):
+    client, air, root = make_app(tmp_path)
+    rel = next(air.rglob("*.fit")).relative_to(air).as_posix()
+    plan = client.post("/api/answers", json={f"keep:{rel}": "reject", "quality-sigma": "3.5"}).json()
+    assert plan["sigma"] == 3.5
+    assert next(i for i in plan["items"] if i["src"] == rel)["action"] == "rejected"
+    assert client.post("/api/answers", json={"target-abc": "new:X"}).status_code == 400   # not in this phase
+    assert client.post("/api/answers", json={"quality-sigma": "99"}).status_code == 400
+
+
+def test_quality_job(tmp_path):
+    import time
+    client, _, _ = make_app(tmp_path)
+    job_id = client.post("/api/quality/run").json()["job_id"]
+    for _ in range(300):
+        snap = client.get(f"/jobs/{job_id}").json()
+        if snap["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.02)
+    assert snap["status"] == "succeeded", snap
+    assert snap["result"]["scored"] == 4
+    assert "scoring" in client.get(f"/jobs/{job_id}/log").text
+    assert any(j["id"] == job_id for j in client.get("/jobs").json()["jobs"])
 
 
 def test_offline_source(tmp_path):
@@ -57,9 +83,13 @@ def test_offline_source(tmp_path):
     assert client.get("/api/plan").status_code == 503
 
 
-def test_nothing_written(tmp_path):
+def test_only_state_and_cache_written(tmp_path):
     client, air, root = make_app(tmp_path)
     before = sorted(p for p in tmp_path.rglob("*"))
     client.get("/api/plan")
     client.post("/api/scan")
-    assert sorted(p for p in tmp_path.rglob("*")) == before
+    rel = next(air.rglob("*.fit")).relative_to(air).as_posix()
+    client.get("/api/preview", params={"rel": rel})
+    client.post("/api/answers", json={f"keep:{rel}": "reject"})
+    new = [p for p in tmp_path.rglob("*") if p not in before]
+    assert new and all(p.is_relative_to(root / "state") for p in new)

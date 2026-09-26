@@ -309,3 +309,39 @@ def test_plan_is_deterministic(w):
     a, b = w.plan().to_dict(), w.plan().to_dict()
     assert a == b
     assert a["summary"]["decisions_open"] == 1
+
+
+# ---------------------------------------------------------------- frame quality
+
+def _q(flagged, peers=5, metric="background", z=9.0, stars=100):
+    return {"stats": {"star_count": stars}, "anomaly_z": {metric: z}, "flagged": flagged, "peers": peers}
+
+
+def test_flagged_lights_are_rejected_unless_kept(w):
+    frames = [w.light(f"20260923-21{i}000", angle=3, seq=i + 1) for i in range(5)]
+    rels = [f"Plan/Light/SoulNebula/{f.name}" for f in frames]
+    quality = {r: _q(False) for r in rels}
+    quality[rels[4]] = _q(True, z=12.5)
+    plan = P.build_plan(scan(LocalDirSource(w.air), NY), build_index(w.nas), load_targets(w.targets), {}, quality)
+    items = {i.src: i for i in plan.items}
+    bad = items[rels[4]]
+    assert (bad.action, bad.dsts, bad.cleanup) == (P.REJECTED, [], "callout")
+    assert "sky background is 12.5σ" in bad.reason and bad.quality["flagged"]
+    assert items[rels[0]].action == P.COPY and items[rels[0]].quality == quality[rels[0]]
+    assert plan.sessions[0].lights == 4 and plan.sessions[0].rejected == 1
+
+    kept = P.build_plan(scan(LocalDirSource(w.air), NY), build_index(w.nas), load_targets(w.targets),
+                        {f"keep:{rels[4]}": "keep", f"keep:{rels[1]}": "reject"}, quality)
+    items = {i.src: i for i in kept.items}
+    assert items[rels[4]].action == P.COPY                      # kept anyway
+    assert items[rels[1]].action == P.REJECTED and items[rels[1]].reason == "rejected by Chris"
+
+
+def test_quality_does_not_touch_frames_already_on_the_nas(w):
+    sadr = "SadrRegion-IC1318/2025-10-16-SadrRegion-2600MC-FMA135"
+    asiair_frame(w.nas, f"{sadr}/lights", "Light", "20251016-204000", obj="NGC 6888", FOCALLEN=137, thumb=False)
+    w.light("20251016-204000", obj="NGC 6888", folder="Autorun/Light/NGC 6888", FOCALLEN=137)
+    rel = next(i.src for i in w.plan().items if i.src.endswith(".fit"))
+    plan = P.build_plan(scan(LocalDirSource(w.air), NY), build_index(w.nas), load_targets(w.targets), {},
+                        {rel: _q(True)})
+    assert next(i for i in plan.items if i.src == rel).action == P.ALREADY

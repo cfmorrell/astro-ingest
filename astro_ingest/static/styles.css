@@ -1318,20 +1318,29 @@ button.danger-outline:hover {
   margin-left: 2px;
 }
 
-.decision.compact {
-  padding: 6px 12px;
-}
-
-.decision.compact .decision-question {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin: 4px 0 6px;
-}
-
-.decision.compact .checklist {
-  margin-bottom: 4px;
-}
-
 .file-list .reason {
   color: var(--text-dim);
+}
+
+/* frame cards: red = flagged (recommended out), green = scored and fine (stacker's default), grey = not scored */
+.frame-card.unscored {
+  border-left-color: var(--border);
+}
+
+.frame-card.kept {
+  border-left-color: var(--warn);
+}
+
+.frame-card .frame-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.quality-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 6px 0 8px;
 }

@@ -1,8 +1,8 @@
 """Environment-derived settings and the write guard.
 
 Every path comes from the environment (see .env.example); nothing is hard-coded. The write guard is the one
-place that decides whether the app may write to a path: only under ASTRO_ROOT (the share being ingested into)
-or STATE_DIR (the app's own state). Source deletes on the ASIAIR go through the Source interface, not here.
+place that decides whether the app may write to a path: only under ASTRO_ROOT (the share being ingested into),
+STATE_DIR (the app's own state) or CACHE_DIR (disposable renders). Source deletes on the ASIAIR go through the Source interface, not here.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ class Config:
     asiair_subnet: str
     asiair_share: str
     asiair_host: str | None
+    cache_dir: Path  # disposable renders (thumbnails, lightbox previews); default STATE_DIR/cache
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
@@ -57,17 +58,19 @@ class Config:
             raise ConfigError(f"TZ={tz_name!r} is not a known time zone") from e
 
         asiair_root = optional("ASIAIR_ROOT")
+        state_dir = required("STATE_DIR")
         return cls(
             astro_root=required("ASTRO_ROOT"),
             # ASTRO_ARCHIVE is the old name for ASTRO_NAS; still accepted so existing .env files keep working
             astro_nas=required("ASTRO_NAS" if env.get("ASTRO_NAS", "").strip() or "ASTRO_ARCHIVE" not in env
                                else "ASTRO_ARCHIVE"),
-            state_dir=required("STATE_DIR"),
+            state_dir=state_dir,
             tz=tz,
             asiair_root=Path(asiair_root) if asiair_root else None,
             asiair_subnet=optional("ASIAIR_SUBNET") or "192.168.1.0/24",
             asiair_share=optional("ASIAIR_SHARE") or "EMMC Images",
             asiair_host=optional("ASIAIR_HOST"),
+            cache_dir=Path(optional("CACHE_DIR") or state_dir / "cache"),
         )
 
     def check_writable(self, path: str | os.PathLike) -> Path:
@@ -76,7 +79,7 @@ class Config:
         Symlinks are resolved first, so a link inside ASTRO_ROOT that points elsewhere is refused.
         """
         real = Path(os.path.realpath(path))
-        for root in (self.astro_root, self.state_dir):
+        for root in (self.astro_root, self.state_dir, self.cache_dir):
             if real.is_relative_to(os.path.realpath(root)):
                 return Path(path)
         raise WriteGuardError(f"refusing to write outside ASTRO_ROOT/STATE_DIR: {path}")

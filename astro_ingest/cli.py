@@ -99,7 +99,8 @@ def print_plan(plan: P.Plan, out=sys.stdout) -> None:
             continue
         status = "NEW TARGET" if s.new_target else ("new" if not s.exists else "exists")
         replaced = f" ({s.replaced} replacing damaged copies)" if s.replaced else ""
-        w(f"  {status:10} {s.rel}  +{s.lights} lights{replaced} +{s.flats} flats  {_gb(s.bytes).strip()}")
+        rejected = f"  ({s.rejected} rejected for quality)" if s.rejected else ""
+        w(f"  {status:10} {s.rel}  +{s.lights} lights{replaced} +{s.flats} flats  {_gb(s.bytes).strip()}{rejected}")
         for warning in s.warnings:
             w(f"             ! {warning}")
     untouched = sum(1 for s in plan.sessions if s.exists and not (s.lights or s.flats))
@@ -164,6 +165,34 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_quality(args: argparse.Namespace) -> int:
+    from astro_ingest import analysis
+    from astro_ingest.service import SourceUnavailable, open_source, replan, scan_and_plan
+    cfg = load_config()
+    if cfg is None:
+        return 2
+    try:
+        source = open_source(cfg, args.source)
+    except SourceUnavailable as e:
+        print(f"quality: {e}", file=sys.stderr)
+        return 2
+    planned = scan_and_plan(cfg, source)
+    targets = analysis.targets_by_group(cfg, source, planned.scan, planned.index, planned.plan)
+    print(f"{len(targets)} light groups, {sum(len(v) for v in targets.values())} frames incl. NAS peers", flush=True)
+
+    def progress(pct: float, msg: str) -> None:
+        if msg.startswith("FAILED") or int(pct) % 5 == 0:
+            print(f"[{pct:5.1f}%] {msg}", flush=True)
+
+    print(analysis.run_scoring(cfg, targets, progress))
+    plan = replan(cfg, planned).plan
+    rejected = [i for i in plan.items if i.action == P.REJECTED]
+    print(f"sensitivity {planned.sigma:g}: {len(rejected)} light frame(s) recommended out")
+    for i in rejected:
+        print(f"  {i.src}  ({i.reason})")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -190,6 +219,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--answers", help="JSON file of {decision_id: answer} to apply")
     p.add_argument("--json", action="store_true", help="print the full plan as JSON")
     p.set_defaults(func=cmd_plan)
+
+    p = sub.add_parser("quality", help="score light frames against their groups and render thumbnails")
+    p.add_argument("--source", help="local directory (default: $ASIAIR_ROOT)")
+    p.set_defaults(func=cmd_quality)
 
     p = sub.add_parser("serve", help="run the web app")
     p.add_argument("--host", default="0.0.0.0")

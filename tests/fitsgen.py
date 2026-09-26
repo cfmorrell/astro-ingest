@@ -51,8 +51,28 @@ def _pad(data: bytes, fill: bytes) -> bytes:
     return data + fill * (-len(data) % BLOCK)
 
 
-def write_fits(path: Path, header: dict | None = None, width: int = 2, height: int = 2) -> Path:
-    """Write a minimal 16-bit FITS image with `header` cards after the mandatory ones."""
+def star_field(width: int = 160, height: int = 120, stars: int = 40, fwhm: float = 3.0, background: float = 500.0,
+               noise: float = 8.0, peak: float = 3000.0, elongation: float = 1.0, seed: int = 0):
+    """A synthetic sky: Gaussian stars on a noisy background, as uint16-range values (numpy array)."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    img = rng.normal(background, noise, (height, width))
+    yy, xx = np.mgrid[0:height, 0:width]
+    sigma = fwhm / 2.3548
+    star_rng = np.random.default_rng(1234)  # same star positions in every frame of a "group"
+    for _ in range(stars):
+        x0, y0 = star_rng.uniform(8, width - 8), star_rng.uniform(8, height - 8)
+        amp = star_rng.uniform(0.3, 1.0) * peak
+        img += amp * np.exp(-(((xx - x0) / (sigma * elongation)) ** 2 + ((yy - y0) / sigma) ** 2) / 2)
+    return np.clip(img, 0, 65535)
+
+
+def write_fits(path: Path, header: dict | None = None, width: int = 2, height: int = 2, data=None) -> Path:
+    """Write a minimal 16-bit FITS image with `header` cards after the mandatory ones.
+
+    `data` (a 2-D numpy array of 0..65535 values) replaces the default all-zero pixels; stored as BITPIX 16 with
+    BZERO 32768, as the ASIAIR writes it."""
     cards = [
         _card("SIMPLE", True),
         _card("BITPIX", 16),
@@ -64,7 +84,14 @@ def write_fits(path: Path, header: dict | None = None, width: int = 2, height: i
     ]
     cards += [_card(k, v) for k, v in (header or {}).items()]
     cards.append(b"END".ljust(80))
-    pixels = struct.pack(f">{width * height}h", *([0] * (width * height)))
+    if data is not None:
+        import numpy as np
+
+        height, width = data.shape
+        cards[3], cards[4] = _card("NAXIS1", width), _card("NAXIS2", height)
+        pixels = (np.round(data).astype(np.int32) - 32768).astype(">i2").tobytes()
+    else:
+        pixels = struct.pack(f">{width * height}h", *([0] * (width * height)))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_pad(b"".join(cards), b" ") + _pad(pixels, b"\0"))
     return path
@@ -77,7 +104,7 @@ INSTRUMENTS = {"2600MC": "ZWO ASI2600MC Duo", "2600MM": "ZWO ASI2600MM Pro", "29
 def asiair_frame(root: Path, folder: str, type_: str, saved_local: str, exposure_s: float = 300.0,
                  obj: str | None = None, angle: int | None = None, temp_c: float = -10.0, seq: int = 1,
                  tz: str = "America/New_York", thumb: bool = True, clock_error_s: float = 0,
-                 camera: str = "2600MC", filter_: str | None = None, **cards) -> Path:
+                 camera: str = "2600MC", filter_: str | None = None, data=None, **cards) -> Path:
     """Write an ASIAIR-named frame (and its _thn.jpg) whose DATE-OBS matches the filename time.
 
     `saved_local` is the true local time at the END of the exposure ('20260923-211420'). `clock_error_s`
@@ -100,7 +127,7 @@ def asiair_frame(root: Path, folder: str, type_: str, saved_local: str, exposure
         header["OBJECT"] = obj
     if filter_:
         header["FILTER"] = filter_
-    path = write_fits(root / folder / name, header)
+    path = write_fits(root / folder / name, header, data=data)
     if thumb:
         path.with_name(path.stem + "_thn.jpg").write_bytes(b"\xff\xd8\xff\xd9")
     return path

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import datetime as dt
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from astro_ingest import analysis, state
 from astro_ingest.config import Config
+from astro_ingest.core import quality
 from astro_ingest.core.nas import NasIndex, build_index, merge
 from astro_ingest.core.planner import Plan, build_plan
 from astro_ingest.core.scan import Scan, scan
@@ -53,9 +54,28 @@ ANSWERS_FILE = "answers.json"
 
 
 def load_answers(cfg: Config) -> dict[str, str]:
-    """Chris's answers to plan decisions, {decision_id: answer}, kept in STATE_DIR (moves to SQLite in phase 4)."""
-    path = Path(cfg.state_dir) / ANSWERS_FILE
-    return json.loads(path.read_text()) if path.is_file() else {}
+    """Chris's answers to plan decisions, {decision_id: answer}, plus per-frame keep/reject choices
+    ("keep:<source rel>") and settings ("quality-sigma"). Kept in STATE_DIR (decisions move to SQLite in phase 4)."""
+    return state.read_json(Path(cfg.state_dir) / ANSWERS_FILE, {})
+
+
+def set_answers(cfg: Config, updates: dict[str, str | None]) -> dict[str, str]:
+    """Merge updates into answers.json (a None value removes the key) and return the new answers."""
+    answers = load_answers(cfg)
+    for key, value in updates.items():
+        if value is None:
+            answers.pop(key, None)
+        else:
+            answers[key] = value
+    state.write_json(cfg, Path(cfg.state_dir) / ANSWERS_FILE, answers)
+    return answers
+
+
+def sigma(answers: dict[str, str]) -> float:
+    try:
+        return float(answers.get(analysis.SIGMA_KEY, quality.INGEST_ANOMALY_Z_THRESHOLD))
+    except ValueError:
+        return quality.INGEST_ANOMALY_Z_THRESHOLD
 
 
 @dataclass
@@ -63,9 +83,23 @@ class Planned:
     scan: Scan
     plan: Plan
     scanned_at: dt.datetime
+    index: NasIndex
+    targets: list[Target]
+    source: Source
+    sigma: float
+
+
+def replan(cfg: Config, planned: Planned, answers: dict[str, str] | None = None) -> Planned:
+    """Plan again from an existing scan (new answers, new frame scores, new sensitivity): no re-reading."""
+    answers = load_answers(cfg) if answers is None else answers
+    base = build_plan(planned.scan, planned.index, planned.targets, answers)
+    s = sigma(answers)
+    scores = analysis.score_groups(cfg, planned.source, planned.scan, planned.index, base, s)
+    plan = build_plan(planned.scan, planned.index, planned.targets, answers, scores) if scores else base
+    return Planned(planned.scan, plan, planned.scanned_at, planned.index, planned.targets, planned.source, s)
 
 
 def scan_and_plan(cfg: Config, source: Source, answers: dict[str, str] | None = None, progress=None) -> Planned:
     result = scan(source, cfg.tz, progress=progress)
-    answers = load_answers(cfg) if answers is None else answers
-    return Planned(result, build_plan(result, nas_index(cfg), targets(cfg), answers), dt.datetime.now(cfg.tz))
+    planned = Planned(result, None, dt.datetime.now(cfg.tz), nas_index(cfg), targets(cfg), source, 0.0)
+    return replan(cfg, planned, answers)

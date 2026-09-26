@@ -54,7 +54,25 @@
         <div id="review-status-badge" class="badge">loading</div>
       </div>
       <div id="review-summary"></div>
-      <p class="hint">Read-only preview. Answering decisions and approving the copy arrive in phase 4; nothing is written until then.</p>
+      <div class="field-row" style="align-items:flex-end; margin-top:12px;">
+        <div class="field" style="flex:0 0 auto; margin-bottom:0;">
+          <label>Frame quality</label>
+          <button id="quality-run-btn">Score light frames</button>
+        </div>
+        <div class="field" style="flex:0 0 auto; margin-bottom:0;">
+          <label>Outlier sensitivity (σ): lower flags more frames</label>
+          <div style="display:flex; gap:6px;">
+            <input type="number" id="quality-sigma" step="0.5" min="1" max="10" style="width:80px;" />
+            <button id="quality-sigma-btn" class="ghost">Apply</button>
+          </div>
+        </div>
+        <div class="field hint" id="quality-status" style="margin-bottom:0;"></div>
+      </div>
+      <div id="quality-progress" class="progress-wrap" style="display:none;">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
+      </div>
+      <p class="hint">Each light frame is scored against the rest of its group (star count, FWHM, eccentricity, SNR, sky background), the same way astro-stacker reviews lights. Red-bordered frames are recommended <b>not</b> to be ingested; click one to see why, and keep it if you disagree. Decisions and the copy itself arrive in phase 4.</p>
     </div>
 
     <div class="card" id="decisions-card" style="display:none;">
@@ -102,12 +120,17 @@
 </main>
 
 <div class="lightbox-overlay" id="lightbox">
-  <div class="lightbox-hint">click image to zoom · click outside to close</div>
+  <div class="lightbox-hint">click image to zoom · ← → to step through the group · Esc to close</div>
+  <button type="button" id="lightbox-prev" class="lightbox-nav lightbox-nav-prev" aria-label="Previous frame">‹</button>
+  <button type="button" id="lightbox-next" class="lightbox-nav lightbox-nav-next" aria-label="Next frame">›</button>
   <div class="lightbox-scroll" id="lightbox-scroll">
     <img id="lightbox-img" src="" alt="" />
   </div>
   <div class="lightbox-footer">
     <div class="lightbox-caption" id="lightbox-caption"></div>
+    <label class="lightbox-exclude-row" id="lightbox-exclude-row" style="display:none;">
+      <input type="checkbox" id="lightbox-exclude" /> Don't ingest this frame
+    </label>
   </div>
 </div>
 

@@ -22,7 +22,7 @@ so tell Chris.
    directly (guest). `ASIAIR_ROOT` can point at a local directory instead (dev: `/astro-sandbox/_asiair-sample`).
 6. Frames already ingested onto the NAS: checksum-compare with the NAS copy, then offer them for source cleanup. Never re-copy.
 7. Frames missing from an existing session on the NAS (e.g. subs Chris once dropped as poor quality): ask per batch,
-   default **append**. Chris wants all data for now; frame-quality rejection may come later.
+   default **append** — but frame-quality screening (decision 17) still applies to them.
 8. `Live`, `Preview`, `Video`, `log`, `GuidingDarkLibrary` are ignored unless Chris asks for them. Never delete them.
 9. Source cleanup deletes each `.fit` **and its `_thn.jpg`** thumbnail. Thumbnails are never copied to the NAS.
    Anything else in `Autorun/`/`Plan/` (other tools' files like `astropup-view-scan.json`, `._*`, `.DS_Store`,
@@ -45,6 +45,16 @@ so tell Chris.
 16. **Damaged NAS copies:** when the NAS copy of a frame is damaged (e.g. truncated) and the ASIAIR has a good one,
     use the better copy: default answer is *replace* (retire the bad NAS copy to `_to_delete/`, then copy).
     Answers to plan decisions live in `STATE_DIR/answers.json` until Phase 4 moves them to SQLite.
+17. **Frame-quality screening before ingest** (Phase 2b). Every light frame is scored against its group (the other
+    frames of that night/object/camera/scope/filter, plus lights already in the destination session on the NAS)
+    with astro-stacker's method: star count, FWHM, eccentricity, SNR, sky background; robust MAD z-scores.
+    **Flagged frames are not ingested by default** (red border); one click keeps any of them. Default sensitivity
+    **σ 4.0** (stacker uses 3.0; Chris chose 4.0 after it caught all 17 dawn frames he had rejected by hand).
+    Rejected frames go on the Clean-up screen as "rejected for quality", called out, deleted only with approval.
+18. **Previews the astro-stacker way:** rendered from the FITS with stacker's stretch (lights unlinked + debayer,
+    flats `calibration`, darks/bias `noise`), 320 px cards and a 1600 px lightbox. The ASIAIR's `_thn.jpg` is
+    not used for display. `core/imaging.py` and `core/quality.py` are ports of stacker's `app/imaging.py` and
+    `app/framestats.py` (commit f31cbcb): keep them in step with stacker.
 
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
@@ -61,7 +71,7 @@ We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ing
 
 Web port: container `8000` → host `8090`. Config comes from env vars (see `.env.example`; `dev/run-dev.sh` passes
 the repo's `.env`): `ASTRO_ROOT` (write target), `ASTRO_NAS` (old name `ASTRO_ARCHIVE` still accepted), `STATE_DIR`, `TZ`, `ASIAIR_ROOT`, `ASIAIR_SUBNET`,
-`ASIAIR_SHARE`, `ASIAIR_HOST`. **Never hard-code paths.** Python deps live in `/workspace/.venv`
+`ASIAIR_SHARE`, `ASIAIR_HOST`, `CACHE_DIR` (disposable renders; default `STATE_DIR/cache`). **Never hard-code paths.** Python deps live in `/workspace/.venv`
 (`python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`); run tests with `.venv/bin/pytest`.
 To see the UI, run `.venv/bin/astro-ingest serve` and screenshot it with headless Chromium:
 `.venv/bin/python dev/screenshot.py http://localhost:8000/ /tmp/shot.png [--click "Review"] [--full]`, then view the
@@ -78,7 +88,8 @@ PNG with the Read tool (the script also prints browser console errors).
   (`.gitignore` blocks `*.fit*`, `*.xisf`, `*.jpg`, `*.jpeg`).
 
 ## Stack
-Python 3.12, FastAPI JSON API + static vanilla-JS frontend (decision 12), `smbprotocol` for the ASIAIR, SQLite in
+Python 3.12, FastAPI JSON API + static vanilla-JS frontend (decision 12), `smbprotocol` for the ASIAIR,
+numpy/astropy/photutils/Pillow for previews and frame scoring (no Siril), SQLite in
 `STATE_DIR` (rollback journal, not WAL, on the shfs mount), a port of `reference/scripts/fitshdr.py` for headers,
 pytest. Keep filing logic in the pure, well-tested `astro_ingest/core/` library, separate from the web layer, so it
 can also run from the CLI (`astro-ingest …`). The architecture and phase plan live in `docs/PLAN.md`.

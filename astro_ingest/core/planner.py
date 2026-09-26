@@ -38,11 +38,12 @@ NOT_KEPT = "not-kept"                  # not kept by the rules (2600 dark flats,
 UNRECOGNIZED = "unrecognized"          # other tools' files, ._*, .DS_Store, unparsed .fit in Autorun/Plan
 ORPHAN_THUMB = "orphan-thumb"          # _thn.jpg without its .fit
 IGNORED = "ignored"                    # Live, Preview, … : never touched
+REJECTED = "rejected"                  # light frame flagged as poor quality vs its group; not ingested unless kept
 
 # Cleanup preview (what Phase 6 may do with the source file)
 CLEANUP = {COPY: "after-verify", APPEND: "after-verify", ALREADY: "after-verify", PENDING: "pending", SKIP: "never",
            NO_LIGHTS: "blocked", OVER_CAP: "callout", NOT_KEPT: "callout", UNRECOGNIZED: "callout",
-           ORPHAN_THUMB: "callout", IGNORED: "never"}
+           ORPHAN_THUMB: "callout", IGNORED: "never", REJECTED: "callout"}
 
 TINY_GROUP = 3                          # light groups this small are asked about (Chris, 2026-09-25)
 BATCH_GAP = dt.timedelta(hours=1)       # a new calibration batch starts after a gap longer than this
@@ -65,6 +66,7 @@ class PlanItem:
     warnings: list[str] = field(default_factory=list)
     group: str | None = None
     decision: str | None = None
+    quality: dict | None = None  # frame-quality scoring for a light: stats, anomaly_z, flagged, peers
 
     @property
     def cleanup(self) -> str:
@@ -103,6 +105,7 @@ class PlannedSession:
     new_target: bool = False
     groups: list[str] = field(default_factory=list)
     lights: int = 0            # light frames this plan will copy there
+    rejected: int = 0          # light frames flagged for quality and left out (unless Chris keeps them)
     replaced: int = 0          # of those, frames that replace a damaged copy already there
     flats: int = 0             # flat / dark-flat frames this plan will copy there
     bytes: int = 0
@@ -191,9 +194,11 @@ def _angle_close(a: int, b: int) -> bool:
 
 
 class _Planner:
-    def __init__(self, scan: Scan, index: NasIndex, targets: list[Target], answers: dict[str, str]):
+    def __init__(self, scan: Scan, index: NasIndex, targets: list[Target], answers: dict[str, str],
+                 quality: dict[str, dict]):
         self.scan, self.index, self.targets = scan, index, targets
         self.answers = answers
+        self.quality = quality
         self.items: dict[str, PlanItem] = {}
         self.frames: dict[str, SourceFrame] = {}
         self.groups: list[Group] = []
@@ -371,6 +376,7 @@ class _Planner:
         for f in fs:
             it = self.item(f, COPY)
             it.group = gid
+            it.quality = self.quality.get(f.rel)
             self.check_ingested(f, it)
             status[f.rel] = it
 
@@ -492,10 +498,25 @@ class _Planner:
         else:
             for rel in new:
                 status[rel].reason = f"new session {session.rel}" if not session.exists else ""
+        self.apply_quality(status)
+        session.rejected += sum(1 for it in status.values() if it.action == REJECTED)
         copied = [it for it in status.values() if it.action in (COPY, APPEND)]
         session.lights += len(copied)
         session.replaced += sum(1 for it in copied if it.retire)
         session.bytes += sum(it.size for it in copied)
+
+    def apply_quality(self, status: dict[str, PlanItem]) -> None:
+        """Flagged lights are not ingested unless Chris keeps them (answers "keep:<src>" = "keep"); he can also
+        reject any frame by hand ("reject"). Frames without a score are unaffected."""
+        for rel, it in status.items():
+            if it.action not in (COPY, APPEND):
+                continue
+            q = self.quality.get(rel)
+            choice = self.answers.get(f"keep:{rel}")
+            if choice == "reject":
+                it.action, it.dsts, it.reason = REJECTED, [], "rejected by Chris"
+            elif q and q.get("flagged") and choice != "keep":
+                it.action, it.dsts, it.reason = REJECTED, [], _quality_reason(q)
 
     def site_warnings(self, g: Group, fs: list[SourceFrame]) -> None:
         labels = Counter()
@@ -741,5 +762,17 @@ class _Planner:
         return bool(s and s.has_flats)
 
 
-def build_plan(scan: Scan, index: NasIndex, targets: list[Target], answers: dict[str, str] | None = None) -> Plan:
-    return _Planner(scan, index, targets, answers or {}).run()
+def _quality_reason(q: dict) -> str:
+    stats = q.get("stats") or {}
+    if stats.get("star_count") == 0:
+        return f"poor quality: no stars detected (vs {q.get('peers', 0)} frames in its group)"
+    metric, z = max((q.get("anomaly_z") or {"?": 0}).items(), key=lambda kv: kv[1])
+    label = {"star_count": "star count", "fwhm": "FWHM", "roundness": "eccentricity", "snr": "SNR",
+             "background": "sky background", "background_std": "background noise"}.get(metric, metric)
+    return f"poor quality: {label} is {z:.1f}σ off the other {q.get('peers', 0) - 1} frames in its group"
+
+
+def build_plan(scan: Scan, index: NasIndex, targets: list[Target], answers: dict[str, str] | None = None,
+               quality: dict[str, dict] | None = None) -> Plan:
+    """`quality`: {source rel: frame-quality scoring} from analysis.score_groups(); optional."""
+    return _Planner(scan, index, targets, answers or {}, quality or {}).run()
