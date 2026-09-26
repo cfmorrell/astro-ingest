@@ -20,6 +20,13 @@ so tell Chris.
 ## Chris's decisions (planning session, 2026-09-25)
 5. Only the ASIAIR's **`EMMC Images`** share. The app **finds the ASIAIR on `192.168.1.0/24`** and talks SMB to it
    directly (guest). `ASIAIR_ROOT` can point at a local directory instead (dev: `/astro-sandbox/_asiair-sample`).
+   **Never rely on the `/asiair` host mount** to find or reach the device (`astro-ingest find` does discovery).
+   - **Several devices on the network: Chris picks one.** The choice is remembered in `STATE_DIR/devices.json` by
+     **address + a name he gives it** (every ASIAIR reports the same identity: SMB server id spells "asiair",
+     NetBIOS "ASIAIR", MAC hidden), so each ASIAIR should have a DHCP reservation. If the remembered address stops
+     answering and another device appears, **ask; never switch devices silently.**
+   - **Seestar support comes later:** devices are recognized by share *and* top-level folders
+     (`sources/devices.py` KINDS), since the Seestar's share is also called "EMMC Images".
 6. Frames already ingested onto the NAS: checksum-compare with the NAS copy, then offer them for source cleanup. Never re-copy.
 7. Frames missing from an existing session on the NAS (e.g. subs Chris once dropped as poor quality): ask per batch,
    default **append** — but frame-quality screening (decision 17) still applies to them.

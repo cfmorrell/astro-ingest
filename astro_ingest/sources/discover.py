@@ -1,10 +1,11 @@
-"""Find the ASIAIR on the home network.
+"""Find capture devices (today: ZWO ASIAIR) on the home network.
 
-1. If a last-known address is given, try it first (the ASIAIR usually keeps its DHCP lease).
-2. Otherwise probe every host in ASIAIR_SUBNET for SMB (TCP 445) in parallel, with a short timeout.
-3. A host that lets a guest connect to the "EMMC Images" share is an ASIAIR.
+1. Try the addresses we already know (the remembered device's address, ASIAIR_HOST) first: if the remembered
+   device answers there, no scan is needed.
+2. Otherwise probe every host in the subnet for SMB (TCP 445) in parallel, with a short timeout.
+3. Identify each SMB host (devices.identify): a guest-openable share plus the device's own top-level folders.
 
-Read-only by construction: an SMB tree connect to the share, then disconnect. No file is listed, opened or changed.
+Read-only by construction: guest sessions, tree connects and one top-level listing per share. No file is opened.
 """
 
 from __future__ import annotations
@@ -12,21 +13,22 @@ from __future__ import annotations
 import ipaddress
 import socket
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
+
+from astro_ingest.sources.devices import Device, identify, is_remembered
 
 SMB_PORT = 445
 
 
 @dataclass
 class Discovery:
-    found: list[str]                 # hosts exporting the share (normally one)
+    devices: list[Device]            # every recognized device found
     smb_hosts: list[str]             # every host that answered on 445
     scanned: int                     # hosts probed
     seconds: float
-    errors: dict[str, str] = field(default_factory=dict)  # host -> why the share check failed
+    errors: dict[str, str] = field(default_factory=dict)  # host -> why identification failed
 
 
 def port_open(host: str, port: int = SMB_PORT, timeout: float = 0.5) -> bool:
@@ -37,53 +39,32 @@ def port_open(host: str, port: int = SMB_PORT, timeout: float = 0.5) -> bool:
         return False
 
 
-def has_share(host: str, share: str, timeout: float = 5.0) -> bool:
-    """True if `share` on `host` accepts a guest connection. Raises on connection/auth problems (reported)."""
-    from smbprotocol.connection import Connection
-    from smbprotocol.exceptions import SMBResponseException
-    from smbprotocol.session import Session
-    from smbprotocol.tree import TreeConnect
-
-    # The ASIAIR allows guest access only. A guest session has no signing key, so signing must not be required and
-    # SMB3's secure-negotiate check (which needs that key) has to be skipped for the tree connect.
-    conn = Connection(uuid.uuid4(), host, SMB_PORT, require_signing=False)
-    conn.connect(timeout=timeout)
-    try:
-        session = Session(conn, username="guest", password="", require_encryption=False, auth_protocol="ntlm")
-        session.connect()
-        try:
-            tree = TreeConnect(session, rf"\\{host}\{share}")
-            try:
-                tree.connect(require_secure_negotiate=False)
-            except SMBResponseException:
-                return False  # no such share (or not allowed): not an ASIAIR
-            tree.disconnect()
-            return True
-        finally:
-            session.disconnect()
-    finally:
-        conn.disconnect(True)
-
-
-def discover(subnet: str, share: str, hint: str | None = None, workers: int = 64, port_timeout: float = 0.5,
-             probe: Callable[[str], bool] | None = None, check: Callable[[str, str], bool] = has_share) -> Discovery:
-    """Look for hosts exporting `share`. `probe`/`check` are injectable for tests."""
+def discover(subnet: str, hints: list[str] | None = None, remembered: dict | None = None, full: bool = False,
+             workers: int = 64, port_timeout: float = 0.5, probe: Callable[[str], bool] | None = None,
+             ident: Callable[[str], list[Device]] = identify) -> Discovery:
+    """Find devices. With a `remembered` device and not `full`, stop as soon as it answers at its address.
+    `probe`/`ident` are injectable for tests."""
     probe = probe or (lambda h: port_open(h, timeout=port_timeout))
     started = time.monotonic()
     errors: dict[str, str] = {}
 
-    def confirmed(host: str) -> bool:
+    def identified(host: str) -> list[Device]:
         try:
-            return check(host, share)
-        except Exception as exc:  # unreachable mid-check, auth refused, ...: not it, but say why
+            return ident(host)
+        except Exception as exc:  # dropped mid-check, auth refused, ...: not usable, but say why
             errors[host] = f"{type(exc).__name__}: {exc}"
-            return False
+            return []
 
-    if hint and probe(hint) and confirmed(hint):
-        return Discovery([hint], [hint], 1, round(time.monotonic() - started, 2), errors)
+    hints = [h for h in dict.fromkeys(hints or []) if h]
+    if remembered and not full:
+        for h in hints:
+            if probe(h):
+                devs = identified(h)
+                if any(is_remembered(d, remembered) for d in devs):
+                    return Discovery(devs, [h], len(hints), round(time.monotonic() - started, 2), errors)
 
     hosts = [str(h) for h in ipaddress.ip_network(subnet, strict=False).hosts()]
     with ThreadPoolExecutor(max_workers=workers) as pool:
         smb_hosts = [h for h, ok in zip(hosts, pool.map(probe, hosts)) if ok]
-    found = [h for h in smb_hosts if confirmed(h)]
-    return Discovery(found, smb_hosts, len(hosts), round(time.monotonic() - started, 2), errors)
+    devices = [d for h in smb_hosts for d in identified(h)]
+    return Discovery(devices, smb_hosts, len(hosts), round(time.monotonic() - started, 2), errors)

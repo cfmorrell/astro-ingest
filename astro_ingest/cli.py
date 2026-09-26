@@ -194,24 +194,47 @@ def cmd_quality(args: argparse.Namespace) -> int:
 
 
 def cmd_find(args: argparse.Namespace) -> int:
-    """Find the ASIAIR on the network (read-only: a guest connect to the share, nothing listed or opened)."""
+    """Find capture devices on the network and pick the one to ingest from (read-only on the devices)."""
+    from astro_ingest.service import remember_device, remembered_device
+    from astro_ingest.sources.devices import choose, describe, is_remembered
     from astro_ingest.sources.discover import discover
     cfg = load_config()
     if cfg is None:
         return 2
     subnet = args.subnet or cfg.asiair_subnet
-    print(f"Looking for '{cfg.asiair_share}' on {subnet}" + (f" (trying {cfg.asiair_host} first)" if cfg.asiair_host else ""),
-          flush=True)
-    d = discover(subnet, cfg.asiair_share, hint=cfg.asiair_host)
+    remembered = remembered_device(cfg)
+    hints = [remembered["host"]] if remembered else []
+    if cfg.asiair_host:
+        hints.append(cfg.asiair_host)
+    print(f"Looking on {subnet}" + (f" (trying {', '.join(hints)} first)" if hints else ""), flush=True)
+    d = discover(subnet, hints, remembered, full=args.all or bool(args.select))
     print(f"Probed {d.scanned} host(s) in {d.seconds}s; SMB answered on: {', '.join(d.smb_hosts) or 'none'}")
     for host, err in d.errors.items():
-        print(f"  {host}: share check failed ({err})")
-    if not d.found:
-        print("No ASIAIR found (is it powered on and on this network?)")
-        return 1
-    for host in d.found:
-        print(f"ASIAIR: {host}  (\\\\{host}\\{cfg.asiair_share})")
-    return 0
+        print(f"  {host}: couldn't identify ({err})")
+
+    if args.select:
+        picked = [x for x in d.devices if args.select in (x.host, x.name)]
+        if len(picked) != 1:
+            print(f"--select {args.select!r} matches {len(picked)} of the devices found", file=sys.stderr)
+            return 2
+        record = remember_device(cfg, picked[0], args.name)
+        print(f"Selected {describe(record)} (remembered in {cfg.state_dir}/devices.json)")
+        return 0
+
+    choice = choose(d.devices, remembered)
+    print(choice.message)
+    for n, x in enumerate(choice.candidates, 1):
+        mark = "*" if choice.device is x else " "
+        yours = f"  <- {remembered.get('nickname') or 'yours'}" if is_remembered(x, remembered) else ""
+        print(f" {mark}{n}. {x.label:12} {x.host:15} name={x.name or '-':12} folders: {', '.join(x.folders)}{yours}")
+    if choice.status == "only-one":
+        remember_device(cfg, choice.device, args.name)
+        print(f"Remembered it in {cfg.state_dir}/devices.json. Give it a name with: "
+              f"astro-ingest find --select {choice.device.host} --name \"<name>\"")
+    if choice.status == "ask":
+        print('Pick one with:  astro-ingest find --select <address> --name "<your name for it>"')
+        return 3
+    return 0 if choice.device else 1
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -245,8 +268,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--source", help="local directory (default: $ASIAIR_ROOT)")
     p.set_defaults(func=cmd_quality)
 
-    p = sub.add_parser("find", help="find the ASIAIR on the network (read-only)")
+    p = sub.add_parser("find", help="find capture devices on the network and pick one (read-only)")
     p.add_argument("--subnet", help="network to search (default: $ASIAIR_SUBNET)")
+    p.add_argument("--all", action="store_true", help="scan the whole subnet even if the remembered device answers")
+    p.add_argument("--select", metavar="ADDRESS", help="pick this device (its address, or its network name)")
+    p.add_argument("--name", help="your name for the device you pick (e.g. 'Z61 rig')")
     p.set_defaults(func=cmd_find)
 
     p = sub.add_parser("serve", help="run the web app")

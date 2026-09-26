@@ -78,6 +78,21 @@ def sigma(answers: dict[str, str]) -> float:
         return quality.INGEST_ANOMALY_Z_THRESHOLD
 
 
+DEVICES_FILE = "devices.json"
+
+
+def remembered_device(cfg: Config) -> dict | None:
+    """The capture device Chris picked (kind, host, server_guid, …), from STATE_DIR/devices.json."""
+    return state.read_json(Path(cfg.state_dir) / DEVICES_FILE, {}).get("selected")
+
+
+def remember_device(cfg: Config, device, nickname: str | None = None) -> dict:
+    """Remember `device` (by kind + address) as the one to ingest from, with Chris's name for it."""
+    record = {**device.to_dict(), "nickname": nickname}
+    state.write_json(cfg, Path(cfg.state_dir) / DEVICES_FILE, {"selected": record})
+    return record
+
+
 @dataclass
 class Planned:
     scan: Scan
