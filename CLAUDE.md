@@ -83,6 +83,13 @@ so tell Chris.
 23. **Cross-night flats:** offered only when target, camera, scope and filter match, nights ≤ 7 days apart, and
     rotation matches mod 180° within ±3° (never the unsolved 79°). **Default: don't borrow**; a bad flat is
     worse than no flat.
+24. **Clean up (phase 6)** deletes from the device only what passes every gate: the frame is proven on the NAS by
+    BLAKE2b (copied by the app, or checked by the **Verify** job, which reads older frames from the device once);
+    Chris ticked it (verified frames ticked by default, callouts unticked, blocked/never not tickable); the device
+    is re-listed right before (size + mtime unchanged, nothing written in the last 15 min) and each NAS copy is
+    re-hashed; deletes only under `Autorun/`/`Plan/`, `.fit` then `_thn.jpg`, empty object folders removed; the
+    device is listed again after and must differ by exactly the deleted files. **`ALLOW_DEVICE_DELETE=1` is
+    required for a real device over SMB; it stays off until Chris confirms his ASIAIR and NAS backups are done.**
 
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
@@ -101,8 +108,12 @@ We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ing
 Web port: container `8000` → host `8090`. Config comes from env vars (see `.env.example`; `dev/run-dev.sh` passes
 the repo's `.env`): `ASTRO_ROOT` (write target), `ASTRO_NAS` (old name `ASTRO_ARCHIVE` still accepted), `STATE_DIR`, `TZ`, `ASIAIR_ROOT`, `ASIAIR_SUBNET`,
 `ASIAIR_SHARE`, `ASIAIR_HOST`, `CACHE_DIR` (disposable renders; default `STATE_DIR/cache`), `STAGING_DIR`,
-`ASSUMED_WIFI_MB_S`. **Never hard-code paths.** Python deps live in `/workspace/.venv`
-(`python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`); run tests with `.venv/bin/pytest`.
+`ASSUMED_WIFI_MB_S`, `ALLOW_DEVICE_DELETE`. **Never hard-code paths.** Python deps live in `/workspace/.venv`
+(`python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`); run tests with `.venv/bin/pytest`. The SMB clean-up test
+needs a throwaway SMB server from its own venv (`python3 -m venv .venv-smbtest && .venv-smbtest/bin/pip install
+impacket`); **never install impacket into `.venv`** (its `smbclient.py` script shadows the `smbclient` package).
+For a full-size clean-up test, point `ASIAIR_ROOT` at `/astro-sandbox/_asiair-scratch` (a `cp -al` hard-link copy of
+the sample; recreate it the same way).
 To see the UI, run `.venv/bin/astro-ingest serve` and screenshot it with headless Chromium:
 `.venv/bin/python dev/screenshot.py http://localhost:8000/ /tmp/shot.png [--click "Review"] [--full]`, then view the
 PNG with the Read tool (the script also prints browser console errors).
