@@ -345,3 +345,29 @@ def test_quality_does_not_touch_frames_already_on_the_nas(w):
     plan = P.build_plan(scan(LocalDirSource(w.air), NY), build_index(w.nas), load_targets(w.targets), {},
                         {rel: _q(True)})
     assert next(i for i in plan.items if i.src == rel).action == P.ALREADY
+
+
+# ---------------------------------------------------------------- Select-step exclusions
+
+def test_excluded_frames_and_sets(w):
+    frames = [w.light(f"20260923-21{i}000", angle=3, seq=i + 1) for i in range(5)]
+    w.flat("20260924-063300", angle=185)
+    rels = [f"Plan/Light/SoulNebula/{f.name}" for f in frames]
+    plan = w.plan({f"exclude:{rels[0]}": "1"})
+    items = {i.src: i for i in plan.items}
+    assert (items[rels[0]].action, items[rels[0]].dsts, items[rels[0]].cleanup) == (P.EXCLUDED, [], "callout")
+    assert plan.sessions[0].lights == 4
+
+    everything = w.plan({f"exclude:{r}": "1" for r in rels})
+    assert everything.sessions == [] and everything.decisions == []          # no session, no questions
+    flat = by_name(everything, "Flat_")[0]
+    assert flat.action == P.EXCLUDED and "lights were all excluded" in flat.reason   # flats follow their lights
+
+
+def test_excluding_keeps_decision_ids_stable(w):
+    for i in range(6):
+        w.light(f"20260427-21{i}000", obj="NGC 4565", FOCALLEN=1384, seq=i + 1)
+    first = w.plan()
+    rel = next(i.src for i in first.items if i.src.endswith("_0001.fit"))
+    second = w.plan({f"exclude:{rel}": "1"})
+    assert [d.id for d in first.decisions] == [d.id for d in second.decisions]

@@ -4,9 +4,9 @@
  * collapsing) follows astro-stacker's static/app.js at commit f31cbcb.
  */
 
-const STEPS = ["connect", "scan", "review", "copy", "file", "clean"];
-const STEP_LABELS = { connect: "Connect", scan: "Scan", review: "Review", copy: "Copy & verify", file: "File", clean: "Clean up" };
-const STEP_PHASE = { copy: 4, file: 5, clean: 6 };  // steps not built yet: shown, disabled, tagged with their phase
+const STEPS = ["connect", "scan", "select", "stage", "review", "copy", "file", "clean"];
+const STEP_LABELS = { connect: "Connect", scan: "Scan", select: "Select", stage: "Stage", review: "Review", copy: "Copy & verify", file: "File", clean: "Clean up" };
+const STEP_PHASE = { copy: "4b", file: "5", clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
 const LARGE_GROUP_THRESHOLD = 20;  // beyond this, collapse to flagged frames +/- 2 neighbours (as astro-stacker)
 const SMALL_GROUP_PEERS = 10;      // fewer frames than this to compare against: scoring is less reliable (M42 04-11)
 const THUMB = 320;
@@ -22,6 +22,7 @@ const ACTION_LABELS = {
   "over-cap": "over 10-frame cap",
   "not-kept": "not kept",
   "rejected": "rejected (quality)",
+  "excluded": "left out by you",
   "unrecognized": "unrecognized",
   "orphan-thumb": "orphan thumbnail",
   "ignored": "ignored folder",
@@ -410,6 +411,8 @@ function stepStatus(step) {
   switch (step) {
     case "connect": return { available: true, complete: !!(state.health && state.health.source_online) };
     case "scan": return { available: true, complete: planned };
+    case "select": return { available: planned, complete: planned && selectedItems().length > 0 };
+    case "stage": return { available: planned, complete: planned && selectedItems().length > 0 && selectedItems().every((i) => i.staged) };
     case "review": return { available: planned, complete: planned && state.plan.summary.decisions_open === 0 };
     default: return { available: false, complete: false };
   }
@@ -535,6 +538,168 @@ function renderScan() {
   const row = el("div", { class: "stat-row" }, []);
   Object.keys(byTop).sort().forEach((top) => row.appendChild(stat(byTop[top].files, `${top} · ${gb(byTop[top].bytes)}`)));
   body.appendChild(row);
+}
+
+// ---------- select: which frames to read from the device ----------
+
+function captureStamp(src) {
+  // "…_20260915-052048_…" -> "20260915-052048" (sorts chronologically; ASIAIR names carry local time)
+  const m = basename(src).match(/_(\d{8}-\d{6})_/);
+  return m ? m[1] : basename(src);
+}
+
+function stampLabel(stamp) {
+  const m = stamp.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+  return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : stamp;
+}
+
+function isSelectable(item) {
+  return (state.plan.stageable_actions || []).includes(item.action) || item.action === "excluded";
+}
+
+function selectedItems() {
+  return state.plan ? state.plan.items.filter((i) => (state.plan.stageable_actions || []).includes(i.action)) : [];
+}
+
+function roughTime(bytes) {
+  const minutes = bytes / 1e6 / state.plan.rate_mb_s / 60;
+  if (bytes === 0) return "nothing to read";
+  if (minutes < 1) return "under a minute";
+  if (minutes < 60) return `about ${Math.max(1, Math.round(minutes / 5) * 5 || Math.round(minutes))} min`;
+  const h = Math.floor(minutes / 60);
+  const m = Math.round((minutes - h * 60) / 5) * 5;
+  return `about ${h} h${m ? ` ${m} min` : ""}`;
+}
+
+function setsForSelect(p) {
+  const sets = [];
+  p.groups.forEach((g) => {
+    const items = g.items.map((src) => state.itemsBySrc[src]).filter((i) => i && isSelectable(i));
+    if (!items.length) return;
+    items.sort((a, b) => captureStamp(a.src).localeCompare(captureStamp(b.src)));
+    const where = g.dst_folders.length ? g.dst_folders[0].replace(/\/(lights|flats|darkflats)(-[^/]+)?$/, "") : null;
+    const what = g.kind === "lights" ? `${g.object || "lights"} lights` : g.kind;
+    sets.push({ id: g.id, night: g.night || "", title: where || `${what} · night of ${g.night} (target to be decided)`, kind: g.kind, what, items });
+  });
+  return sets.sort((a, b) => (a.night + a.title).localeCompare(b.night + b.title));
+}
+
+const pendingExclusions = {};
+let exclusionTimer = null;
+
+function toggleExclusions(items, exclude) {
+  // Optimistic: flip locally at once (the estimate updates immediately), send a batch to the server shortly after
+  items.forEach((i) => {
+    i.action = exclude ? "excluded" : "copy";
+    pendingExclusions[`exclude:${i.src}`] = exclude ? "1" : null;
+  });
+  renderSelect();
+  clearTimeout(exclusionTimer);
+  exclusionTimer = setTimeout(async () => {
+    const updates = Object.assign({}, pendingExclusions);
+    Object.keys(pendingExclusions).forEach((k) => delete pendingExclusions[k]);
+    applyPlan(await api("POST", "/api/answers", updates));
+  }, 600);
+}
+
+function renderSelect() {
+  const p = state.plan;
+  if (!p) return;
+  const selected = selectedItems();
+  const toRead = selected.filter((i) => !i.staged);
+  const bytes = toRead.reduce((a, i) => a + i.size, 0);
+  const excluded = p.items.filter((i) => i.action === "excluded");
+  setStepBadge("select-status-badge", selected.length ? "accent" : "", `${selected.length} selected`);
+  const summary = document.getElementById("select-summary");
+  summary.innerHTML = "";
+  summary.appendChild(el("div", { class: "stat-row" }, [
+    stat(selected.length, "frames selected"),
+    stat(gb(selected.reduce((a, i) => a + i.size, 0)), "selected"),
+    stat(roughTime(bytes), `to read over Wi-Fi at ~${p.rate_mb_s} MB/s (${p.rate_kind === "measured" ? "measured" : "typical Wi-Fi"})`, "ok"),
+    stat(excluded.length, "left out", excluded.length ? "warn" : ""),
+  ]));
+  if (selected.length && toRead.length < selected.length) {
+    summary.appendChild(el("div", { class: "hint" }, [`${selected.length - toRead.length} of these are already staged and won't be read again.`]));
+  }
+
+  const box = document.getElementById("select-sets");
+  box.innerHTML = "";
+  setsForSelect(p).forEach((set) => {
+    const inSet = set.items.filter((i) => i.action !== "excluded");
+    const setBytes = inSet.reduce((a, i) => a + i.size, 0);
+    const allOut = inSet.length === 0;
+    const grid = el("div", { class: "thumb-grid" }, set.items.map((item) => {
+      const tile = el("div", {
+        class: `thumb-tile${item.action === "excluded" ? " excluded" : ""}`,
+        title: `${basename(item.src)} — ${stampLabel(captureStamp(item.src))}${item.action === "excluded" ? " (left out: click to include)" : " (click to leave out)"}`,
+        onclick: () => toggleExclusions([item], item.action !== "excluded"),
+      }, item.thumb ? [el("img", { src: `/api/thumb?rel=${encodeURIComponent(item.thumb)}`, alt: "", loading: "lazy" }, [])] : []);
+      return tile;
+    }));
+    box.appendChild(el("div", { class: "card" }, [
+      el("div", { class: "set-header" }, [
+        el("span", { class: `badge ${set.kind === "lights" ? "accent" : ""}` }, [set.what]),
+        el("span", { class: "session-path" }, [set.title]),
+        el("span", { class: "hint", style: "margin:0;" }, [`${inSet.length} of ${set.items.length} selected · ${gb(setBytes)}`]),
+        el("button", {
+          class: "small ghost", style: "margin-left:auto;",
+          onclick: () => toggleExclusions(set.items, !allOut),
+        }, [allOut ? "Include set" : "Leave out set"]),
+      ]),
+      grid,
+    ]));
+  });
+  if (!box.children.length) box.appendChild(el("div", { class: "card empty-hint" }, ["Nothing on the device needs reading: everything is already on the NAS."]));
+}
+
+// ---------- stage ----------
+
+function renderStage() {
+  const p = state.plan;
+  if (!p) return;
+  const selected = selectedItems();
+  const toRead = selected.filter((i) => !i.staged);
+  const bytes = toRead.reduce((a, i) => a + i.size, 0);
+  const box = document.getElementById("stage-summary");
+  box.innerHTML = "";
+  box.appendChild(el("div", { class: "stat-row" }, [
+    stat(toRead.length, `frames to read · ${gb(bytes)}`),
+    stat(selected.length - toRead.length, "already staged", "ok"),
+    stat(roughTime(bytes), "estimated over Wi-Fi"),
+  ]));
+  const btn = document.getElementById("stage-run-btn");
+  btn.textContent = toRead.length ? `Stage ${toRead.length} frame${toRead.length === 1 ? "" : "s"}` : "Everything selected is staged";
+  if (!state.stageRunning) btn.disabled = toRead.length === 0;
+  setStepBadge("stage-status-badge", toRead.length ? "" : "ok", toRead.length ? "not staged" : (selected.length ? "staged" : "nothing selected"));
+  document.getElementById("stage-next-btn").style.display = toRead.length ? "none" : "inline-block";
+}
+
+async function watchStageJob(jobId) {
+  const btn = document.getElementById("stage-run-btn");
+  state.stageRunning = true;
+  btn.disabled = true;
+  await pollJob(jobId, document.getElementById("stage-progress"), async (snap) => {
+    state.stageRunning = false;
+    const res = document.getElementById("stage-result");
+    res.innerHTML = "";
+    if (snap.status === "succeeded") {
+      const r = snap.result;
+      res.appendChild(el("div", { class: "hint" }, [`Staged ${r.staged} frame(s) (${gb(r.bytes)} in ${Math.round(r.seconds)} s${r.mb_s ? `, ${r.mb_s} MB/s` : ""}); ${r.already_staged} were already staged. Scored ${r.quality.scored} frame(s).`]));
+    } else {
+      res.appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "staging failed"]));
+    }
+    await loadPlan(false);
+  });
+}
+
+async function runStage() {
+  try {
+    const { job_id } = await api("POST", "/api/stage/run");
+    await watchStageJob(job_id);
+  } catch (e) {
+    document.getElementById("stage-result").innerHTML = "";
+    document.getElementById("stage-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+  }
 }
 
 // ---------- review ----------
@@ -738,7 +903,10 @@ async function runQuality() {
 async function resumeRunningJob() {
   // Picks up a scoring job started earlier or from another tab (astro-stacker's active-jobs idea)
   try {
-    const running = (await api("GET", "/jobs")).jobs.find((j) => j.kind === "quality" && j.status === "running");
+    const jobsNow = (await api("GET", "/jobs")).jobs;
+    const stage = jobsNow.find((j) => j.kind === "stage" && j.status === "running");
+    if (stage) { state.activeStep = "stage"; showActiveStep(); await watchStageJob(stage.id); }
+    const running = jobsNow.find((j) => j.kind === "quality" && j.status === "running");
     if (running) await watchQualityJob(running.id);
   } catch (e) { /* ignore */ }
 }
@@ -750,7 +918,10 @@ function applyPlan(plan) {
   state.plan = plan;
   state.itemsBySrc = Object.fromEntries(plan.items.map((i) => [i.src, i]));
   renderScan();
+  renderSelect();
+  renderStage();
   renderReview();
+  renderStepper();
   requestAnimationFrame(() => window.scrollTo(window.scrollX, y));
 }
 
@@ -792,7 +963,10 @@ document.getElementById("rescan-btn").addEventListener("click", async (e) => {
   await loadPlan(true);
   e.target.disabled = false;
 });
-document.getElementById("scan-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
+document.getElementById("scan-next-btn").addEventListener("click", () => { state.activeStep = "select"; showActiveStep(); });
+document.getElementById("select-next-btn").addEventListener("click", () => { state.activeStep = "stage"; showActiveStep(); });
+document.getElementById("stage-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
+document.getElementById("stage-run-btn").addEventListener("click", runStage);
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "review"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
 document.getElementById("find-btn").addEventListener("click", () => findDevices(false));

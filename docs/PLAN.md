@@ -201,7 +201,11 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
 3. **ASIAIR discovery and SmbSource (read-only against the real device).** Build `discover.py` and `smb.py`, plus the
    dashboard status and Find button. Test with a fake network in unit tests. Against the live ASIAIR, only list and
    read. Check SMB throughput and reconnect behavior.
-4. **Copy and verify into the sandbox.** `fsops`, `jobs`, the op log, approval, and progress. Checksum
+4a. **Select → Stage (done 2026-09-25).** Select: chronological thumbnail grid per set, leave out frames/sets,
+   live Wi-Fi estimate. Stage: each selected frame read once into `STAGING_DIR` (BLAKE2b, `.part` → rename,
+   re-verified), resumable, then scored from the staged copies. Real ASIAIR: 10 flats (522 MB) staged at 9.1 MB/s,
+   `b2sum`-verified, device listing unchanged.
+4. **Copy and verify into the sandbox** (now from staging, at disk speed). `fsops`, `jobs`, the op log, approval, and progress. Checksum
    already-ingested items against `ASTRO_NAS`. Test resume-after-kill and source drop mid-copy. Confirm the
    no-clobber rename on shfs.
 5. **Filing extras.** PROJECT_INFO for touched sessions, library reindex, multi-night split with `.flats_are_copies`

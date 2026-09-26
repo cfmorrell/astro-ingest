@@ -45,9 +45,46 @@
       <div id="scan-body"></div>
       <div class="progress-wrap">
         <button id="rescan-btn" class="primary">↻ Scan again</button>
-        <button id="scan-next-btn" class="ghost">Next: Review →</button>
+        <button id="scan-next-btn" class="ghost">Next: Select →</button>
       </div>
       <p class="hint">Scanning only reads: it lists every file and reads frame headers in Autorun/ and Plan/. Nothing is written or deleted.</p>
+    </div>
+  </section>
+
+  <!-- ============ SELECT ============ -->
+  <section class="step-panel" data-step="select">
+    <div class="card select-summary">
+      <div class="card-header">
+        <div class="card-title">Choose what to read from the device</div>
+        <div id="select-status-badge" class="badge">loading</div>
+      </div>
+      <div id="select-summary"></div>
+      <div class="progress-wrap">
+        <button id="select-next-btn" class="primary">Next: Stage →</button>
+      </div>
+      <p class="hint">Every frame that would be read is below, oldest first (left to right, top to bottom); frames already on the NAS aren't. Click a thumbnail to leave it out, or leave out a whole set. Left-out frames stay on the ASIAIR and are offered for deletion, called out, on the Clean-up step.</p>
+    </div>
+    <div id="select-sets"></div>
+  </section>
+
+  <!-- ============ STAGE ============ -->
+  <section class="step-panel" data-step="stage">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Read the selected frames into staging</div>
+        <div id="stage-status-badge" class="badge">not staged</div>
+      </div>
+      <div id="stage-summary"></div>
+      <div class="progress-wrap">
+        <button id="stage-run-btn" class="primary">Stage</button>
+        <button id="stage-next-btn" class="ghost" style="display:none;">Next: Review →</button>
+      </div>
+      <div id="stage-progress" class="progress-wrap" style="display:none;">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
+      </div>
+      <div id="stage-result"></div>
+      <p class="hint">Each selected frame is read from the device once, checksummed on the way in, and written to the staging share; scoring, previews and filing then work from that copy at disk speed. Nothing on the device is changed. If the connection drops, press Stage again to continue where it stopped.</p>
     </div>
   </section>
 
@@ -114,7 +151,7 @@
 
   <!-- ============ LATER PHASES ============ -->
   <section class="step-panel" data-step="copy">
-    <div class="card"><div class="card-title">Copy &amp; verify</div><p class="empty-hint">Arrives in phase 4: copy on approval, verify every file by size and checksum.</p></div>
+    <div class="card"><div class="card-title">Copy &amp; verify</div><p class="empty-hint">Arrives in phase 4b: copy from staging onto the NAS on approval, verify every file by size and checksum.</p></div>
   </section>
   <section class="step-panel" data-step="file">
     <div class="card"><div class="card-title">File</div><p class="empty-hint">Arrives in phase 5: PROJECT_INFO, library reindex, new targets, index links.</p></div>

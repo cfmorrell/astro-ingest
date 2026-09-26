@@ -7,6 +7,7 @@ never shadows an API route.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from pathlib import Path, PurePosixPath
 
@@ -14,7 +15,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from astro_ingest import analysis, jobs, service, state
+from astro_ingest import analysis, jobs, service, staging, state
 from astro_ingest.sources import devices, discover
 from astro_ingest.config import VERSION, Config
 from astro_ingest.core import imaging
@@ -54,8 +55,14 @@ def create_app(cfg: Config) -> FastAPI:
             return cache["plan"]
 
     def plan_json(p: service.Planned) -> dict:
-        return {**p.plan.to_dict(), "scanned_at": p.scanned_at.isoformat(timespec="seconds"), "sigma": p.sigma,
-                "sigma_default": service.quality.INGEST_ANOMALY_Z_THRESHOLD}
+        rate, rate_kind = service.transfer_rate(cfg)
+        staged = {i.src for i in p.plan.items if getattr(p.source, "staged", lambda r: False)(i.src)}
+        out = {**p.plan.to_dict(), "scanned_at": p.scanned_at.isoformat(timespec="seconds"), "sigma": p.sigma,
+               "sigma_default": service.quality.INGEST_ANOMALY_Z_THRESHOLD, "rate_mb_s": rate, "rate_kind": rate_kind,
+               "stageable_actions": list(staging.STAGEABLE)}
+        for item in out["items"]:
+            item["staged"] = item["src"] in staged
+        return out
 
     @app.get("/health")
     def health():
@@ -77,10 +84,11 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/answers")
     def post_answers(updates: dict[str, str | None] = Body(...)):
-        """Merge answers ({key: value}, null removes). Phase 2b uses it for per-frame keep/reject
-        ("keep:<source rel>": "keep" | "reject") and the sensitivity ("quality-sigma")."""
+        """Merge answers ({key: value}, null removes): per-frame keep/reject ("keep:<source rel>": "keep" | "reject"),
+        Select-step exclusions ("exclude:<source rel>": "1") and the sensitivity ("quality-sigma")."""
         for key, value in updates.items():
             ok = (key.startswith("keep:") and value in ("keep", "reject", None)) or \
+                 (key.startswith("exclude:") and value in ("1", None)) or \
                  (key == analysis.SIGMA_KEY and (value is None or _is_sigma(value)))
             if not ok:
                 raise HTTPException(400, f"unsupported answer {key!r}={value!r} in this phase")
@@ -128,6 +136,50 @@ def create_app(cfg: Config) -> FastAPI:
         with lock:
             cache.pop("plan", None)  # the source may have changed
         return devices_json()
+
+    # ---------------- the device's own thumbnails, for the Select grid (small, fast over Wi-Fi)
+
+    @app.get("/api/thumb")
+    def thumb(rel: str = Query(...)):
+        rel = _safe_rel(rel)
+        if not rel.endswith("_thn.jpg"):
+            raise HTTPException(400, "not a thumbnail path")
+        p = planned()
+        entry = next((f.thumb for f in p.scan.frames if f.thumb and f.thumb.rel == rel), None)
+        if entry is None:
+            raise HTTPException(404, "no such thumbnail on the source")
+        cached = cfg.cache_dir / "thumbs" / f"{hashlib.sha1(analysis.src_key(rel, entry.size, entry.mtime).encode()).hexdigest()}.jpg"
+        if not cached.is_file():
+            try:
+                with p.source.open_read(rel) as f:
+                    state.write_bytes(cfg, cached, f.read())
+            except OSError as exc:
+                raise HTTPException(503, f"couldn't read the thumbnail: {exc}") from exc
+        return Response(cached.read_bytes(), media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+    # ---------------- stage: read each selected frame once, then score from the staged copies
+
+    @app.post("/api/stage/run")
+    def run_stage():
+        if jobs.running("stage") or jobs.running("quality"):
+            raise HTTPException(409, "staging or scoring is already running")
+        p = planned()
+        src = p.source
+        entries = {f.rel: f.entry for f in p.scan.frames}
+        todo = [entries[i.src] for i in p.plan.items if i.action in staging.STAGEABLE and i.src in entries]
+
+        def work(progress) -> dict:
+            result = staging.run_staging(cfg, src.source, src.slug, todo, measure_rate=not src.local,
+                                         progress=lambda pct, msg: progress(pct * 0.9, msg))
+            src.reload()
+            q = replan()
+            targets = analysis.targets_by_group(cfg, q.source, q.scan, q.index, q.plan)
+            result["quality"] = analysis.run_scoring(cfg, targets, lambda pct, msg: progress(90 + pct * 0.1, msg))
+            replan()
+            return result
+
+        job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="stage")
+        return {"job_id": job.id, "files": len(todo), "bytes": sum(e.size for e in todo)}
 
     # ---------------- previews (astro-stacker's rendering, cached in CACHE_DIR)
 

@@ -93,10 +93,13 @@ def targets_by_group(cfg: Config, source: Source, scan: Scan, index: NasIndex, p
         if g.kind != "lights":
             continue
         group_items = [items[r] for r in g.items if r in items]
-        if not any(i.action not in (P.ALREADY, P.IGNORED) for i in group_items):
+        if not any(i.action not in (P.ALREADY, P.IGNORED, P.EXCLUDED) for i in group_items):
             continue
+        fast = getattr(source, "is_fast", lambda rel: True)  # staged, or a local folder: never score over Wi-Fi
         targets, names = [], set()
         for i in group_items:
+            if i.action in (P.EXCLUDED, P.SKIP, P.NOT_KEPT) or (i.action != P.ALREADY and not fast(i.src)):
+                continue  # not being ingested, or not staged yet
             e = entries[i.src]
             name = i.src.rsplit("/", 1)[-1]
             names.add(name)

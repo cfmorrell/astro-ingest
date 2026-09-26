@@ -2,7 +2,7 @@
 
 Every path comes from the environment (see .env.example); nothing is hard-coded. The write guard is the one
 place that decides whether the app may write to a path: only under ASTRO_ROOT (the share being ingested into),
-STATE_DIR (the app's own state) or CACHE_DIR (disposable renders). Source deletes on the ASIAIR go through the Source interface, not here.
+STATE_DIR (the app's own state), CACHE_DIR (disposable renders) or STAGING_DIR (frames read once from the device). Source deletes on the ASIAIR go through the Source interface, not here.
 """
 
 from __future__ import annotations
@@ -36,6 +36,8 @@ class Config:
     asiair_share: str
     asiair_host: str | None
     cache_dir: Path  # disposable renders (thumbnails, lightbox previews); default STATE_DIR/cache
+    staging_dir: Path  # one full read of each selected frame from the device; production: a separate UnRAID share
+    assumed_wifi_mb_s: float  # transfer-time estimate until a staging run has measured the real rate
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
@@ -71,6 +73,10 @@ class Config:
             asiair_share=optional("ASIAIR_SHARE") or "EMMC Images",
             asiair_host=optional("ASIAIR_HOST"),
             cache_dir=Path(optional("CACHE_DIR") or state_dir / "cache"),
+            # Chris: staging belongs on its own share (e.g. /mnt/user/astro-staging mounted at /staging). The default
+            # keeps dev working inside the sandbox; "_" never matches a target folder.
+            staging_dir=Path(optional("STAGING_DIR") or Path(env["ASTRO_ROOT"].strip()) / "_staging"),
+            assumed_wifi_mb_s=_positive_float(optional("ASSUMED_WIFI_MB_S"), 10.0),
         )
 
     def check_writable(self, path: str | os.PathLike) -> Path:
@@ -79,7 +85,17 @@ class Config:
         Symlinks are resolved first, so a link inside ASTRO_ROOT that points elsewhere is refused.
         """
         real = Path(os.path.realpath(path))
-        for root in (self.astro_root, self.state_dir, self.cache_dir):
+        for root in (self.astro_root, self.state_dir, self.cache_dir, self.staging_dir):
             if real.is_relative_to(os.path.realpath(root)):
                 return Path(path)
         raise WriteGuardError(f"refusing to write outside ASTRO_ROOT/STATE_DIR: {path}")
+
+
+def _positive_float(value: str | None, default: float) -> float:
+    try:
+        f = float(value) if value else default
+    except ValueError:
+        raise ConfigError(f"not a number: {value!r}") from None
+    if f <= 0:
+        raise ConfigError(f"must be positive: {value!r}")
+    return f

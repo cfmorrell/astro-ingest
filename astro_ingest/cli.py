@@ -238,6 +238,43 @@ def cmd_find(args: argparse.Namespace) -> int:
     return 0 if choice.device else 1
 
 
+def cmd_stage(args: argparse.Namespace) -> int:
+    """Read every selected frame from the source once into STAGING_DIR (resumable), then score from the copies."""
+    from astro_ingest import analysis, staging
+    from astro_ingest.service import SourceUnavailable, open_source, replan, scan_and_plan
+    cfg = load_config()
+    if cfg is None:
+        return 2
+    try:
+        planned = scan_and_plan(cfg, open_source(cfg, args.source))
+    except SourceUnavailable as e:
+        print(f"stage: {e}", file=sys.stderr)
+        return 2
+    src = planned.source
+    entries = {f.rel: f.entry for f in planned.scan.frames}
+    todo = [entries[i.src] for i in planned.plan.items if i.action in staging.STAGEABLE and i.src in entries]
+    print(f"{len(todo)} file(s), {sum(e.size for e in todo) / 1e9:.2f} GB from {src.label} -> {cfg.staging_dir}/{src.slug}",
+          flush=True)
+    last = [-10.0]
+
+    def progress(pct: float, msg: str) -> None:
+        if pct - last[0] >= 5 or pct >= 100:
+            print(f"[{pct:5.1f}%] {msg}", flush=True)
+            last[0] = pct
+
+    try:
+        print(staging.run_staging(cfg, src.source, src.slug, todo, measure_rate=not src.local, progress=progress))
+    except staging.StagingError as e:
+        print(f"stage: {e}", file=sys.stderr)
+        return 1
+    src.reload()
+    planned = replan(cfg, planned)
+    if not args.no_score:
+        targets = analysis.targets_by_group(cfg, planned.source, planned.scan, planned.index, planned.plan)
+        print("scoring:", analysis.run_scoring(cfg, targets, lambda p, m: None))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -276,6 +313,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--select", metavar="ADDRESS", help="pick this device (its address, or its network name)")
     p.add_argument("--name", help="your name for the device you pick (e.g. 'Z61 rig')")
     p.set_defaults(func=cmd_find)
+
+    p = sub.add_parser("stage", help="read the selected frames once into STAGING_DIR, then score them")
+    p.add_argument("--source", help="local directory, 'smb' or smb://host/share (default: as configured)")
+    p.add_argument("--no-score", action="store_true", help="stage only")
+    p.set_defaults(func=cmd_stage)
 
     p = sub.add_parser("serve", help="run the web app")
     p.add_argument("--host", default="0.0.0.0")

@@ -39,11 +39,12 @@ UNRECOGNIZED = "unrecognized"          # other tools' files, ._*, .DS_Store, unp
 ORPHAN_THUMB = "orphan-thumb"          # _thn.jpg without its .fit
 IGNORED = "ignored"                    # Live, Preview, … : never touched
 REJECTED = "rejected"                  # light frame flagged as poor quality vs its group; not ingested unless kept
+EXCLUDED = "excluded"                  # Chris opted out on the Select step: never read; offered for deletion
 
 # Cleanup preview (what Phase 6 may do with the source file)
 CLEANUP = {COPY: "after-verify", APPEND: "after-verify", ALREADY: "after-verify", PENDING: "pending", SKIP: "never",
            NO_LIGHTS: "blocked", OVER_CAP: "callout", NOT_KEPT: "callout", UNRECOGNIZED: "callout",
-           ORPHAN_THUMB: "callout", IGNORED: "never", REJECTED: "callout"}
+           ORPHAN_THUMB: "callout", IGNORED: "never", REJECTED: "callout", EXCLUDED: "callout"}
 
 TINY_GROUP = 3                          # light groups this small are asked about (Chris, 2026-09-25)
 BATCH_GAP = dt.timedelta(hours=1)       # a new calibration batch starts after a gap longer than this
@@ -95,6 +96,7 @@ class _LightLink:
     group: Group
     session: str | None = None
     decision: str | None = None
+    excluded: bool = False     # every frame still to ingest was excluded by Chris
 
 
 @dataclass
@@ -215,6 +217,12 @@ class _Planner:
         self.items[frame.rel] = it
         self.frames[frame.rel] = frame
         return it
+
+    def apply_exclusions(self, items: dict[str, PlanItem]) -> None:
+        """Frames Chris opted out of on the Select step (answers "exclude:<src>" = "1") are never read."""
+        for rel, it in items.items():
+            if it.action in (COPY, PENDING) and not it.retire and self.answers.get(f"exclude:{rel}") == "1":
+                it.action, it.dsts, it.reason = EXCLUDED, [], "excluded by you on the Select step"
 
     def entry_item(self, e: SourceEntry, action: str, reason: str) -> PlanItem:
         it = PlanItem(e.rel, e.size, action, reason=reason)
@@ -379,6 +387,10 @@ class _Planner:
             it.quality = self.quality.get(f.rel)
             self.check_ingested(f, it)
             status[f.rel] = it
+        self.apply_exclusions(status)
+        if not any(it.action in (COPY, PENDING, ALREADY) for it in status.values()):
+            link.excluded = True   # nothing of this group is being ingested: no session, no questions
+            return
 
         # 1. ingest evidence: a session already holding some of these lights
         evidence = Counter()
@@ -409,8 +421,9 @@ class _Planner:
         target, new_target = self.resolve_target(link, status, obj, night)
         if target is None:
             return
-        if len(fs) <= TINY_GROUP:
-            d = self.decide("tiny-group", gid, f"Only {len(fs)} {obj} light(s) on {night}. File them as a session, "
+        live = [f for f in fs if status[f.rel].action == COPY]
+        if len(live) <= TINY_GROUP:
+            d = self.decide("tiny-group", gid, f"Only {len(live)} {obj} light(s) on {night}. File them as a session, "
                             "or treat them as test frames?",
                             [("file", "File as a session"), ("test", "Test frames: offer for deletion")], None,
                             [f.rel for f in fs if status[f.rel].action == COPY], gid)
@@ -592,6 +605,7 @@ class _Planner:
             if it.action == ALREADY:
                 it.action = COPY  # flats may still be needed in another session; decided below
             items[f.rel] = it
+        self.apply_exclusions(items)
 
         if kind == "darkflats" and cam is not None and not cam.darkflats:
             for it in items.values():
@@ -599,7 +613,13 @@ class _Planner:
                 it.reason = f"dark flats aren't kept for the {cam.token} (its flats use the master bias)"
             return
 
-        targets, waiting = self.flat_targets(g)
+        targets, waiting, lights_excluded = self.flat_targets(g)
+        if not targets and not waiting and lights_excluded:
+            for it in items.values():
+                if it.action == COPY:
+                    it.action, it.dsts = EXCLUDED, []
+                    it.reason = "its lights were all excluded by you; include them here if you still want these"
+            return
         if not targets and waiting:
             d = self.decisions[waiting[0]]
             for rel, it in items.items():
@@ -626,7 +646,7 @@ class _Planner:
         g.dst_folders = [f"{s}/{sub}" for s in targets]
         keep = {f.rel for f in sorted(fs, key=lambda f: (f.start_local, f.rel))[:rules.CALIBRATION_CAP]}
         for rel, it in items.items():
-            if it.action in (PENDING, SKIP) or it.retire:
+            if it.action in (PENDING, SKIP, EXCLUDED) or it.retire:
                 continue
             if rel not in keep:
                 it.action, it.reason = OVER_CAP, f"beyond the {rules.CALIBRATION_CAP}-frame calibration cap"
@@ -646,14 +666,15 @@ class _Planner:
                     session.groups.append(gid)
                 session.warnings.extend(w for w in g.warnings if w not in session.warnings)
 
-    def flat_targets(self, g: Group) -> tuple[list[str], list[str]]:
+    def flat_targets(self, g: Group) -> tuple[list[str], list[str], bool]:
         """Sessions (planned or on the NAS) these flats belong to: same night, camera, scope and filter.
 
         Also returns the decisions of matching light groups that have no session yet (e.g. an unknown target):
-        the flats wait on those.
+        the flats wait on those, and whether matching lights exist but were all excluded by Chris.
         """
         candidates: dict[str, list[int]] = {}
         waiting: list[str] = []
+        lights_excluded = False
         for link in self.light_links:
             lg = link.group
             if not (lg.night == g.night and lg.camera == g.camera and lg.scope == g.scope and lg.filter == g.filter):
@@ -662,21 +683,23 @@ class _Planner:
                 candidates.setdefault(link.session, []).extend(lg.angles)
             elif link.decision and link.decision not in waiting:
                 waiting.append(link.decision)
+            elif link.excluded:
+                lights_excluded = True
         for s in self.index.sessions_on(g.night) if g.night else []:
             p = s.parsed
             if p and p.camera_token == g.camera and (p.scope_token or None) == (g.scope or None):
                 candidates.setdefault(s.rel, []).extend(sorted(s.light_angles))
         if not candidates:
-            return [], waiting
+            return [], waiting, lights_excluded
         if g.angles and g.angles != [SUSPECT_ANGLE]:
             close = [s for s, angs in candidates.items() if any(_angle_close(a, b) for a in g.angles for b in angs)]
             if close:
-                return sorted(close), waiting
+                return sorted(close), waiting, lights_excluded
             g.warnings.append(f"flat angle {g.angles} doesn't match the lights; matched by night, camera and scope")
         elif g.angles == [SUSPECT_ANGLE] and any(angs and not any(_angle_close(SUSPECT_ANGLE, a) for a in angs)
                                                   for angs in candidates.values()):
             g.warnings.append("flats report 79° (the ASIAIR's unsolved default); matched by night, camera and scope")
-        return sorted(candidates), waiting
+        return sorted(candidates), waiting, lights_excluded
 
     # ------------------------------------------------------------ library darks and bias
 
@@ -704,6 +727,7 @@ class _Planner:
             it.group = gid
             self.check_ingested(f, it)
             items[f.rel] = it
+        self.apply_exclusions(items)
         if cam is None or not cam.cooled:
             self.pending_group(g, items, "camera", f"{kind} batch from {g.night}: unknown camera, no library to file it in.",
                                [("skip", "Leave on the ASIAIR")])

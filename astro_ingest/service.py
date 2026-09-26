@@ -134,7 +134,26 @@ def replan(cfg: Config, planned: Planned, answers: dict[str, str] | None = None)
     return Planned(planned.scan, plan, planned.scanned_at, planned.index, planned.targets, planned.source, s)
 
 
+def staged_source(cfg: Config, source: Source):
+    """Wrap the device source so staged copies are read locally (see staging.py)."""
+    from astro_ingest import staging
+    if isinstance(source, staging.StagedSource):
+        return source
+    local = isinstance(source, LocalDirSource)
+    return staging.StagedSource(source, cfg, staging.device_slug(remembered_device(cfg), local), local)
+
+
+def transfer_rate(cfg: Config) -> tuple[float, str]:
+    """(MB/s, "measured" | "assumed") for the Select step's rough estimate."""
+    from astro_ingest import staging
+    rate = staging.StagingStore(cfg).rate
+    if rate and rate.get("mb_s"):
+        return float(rate["mb_s"]), "measured"
+    return cfg.assumed_wifi_mb_s, "assumed"
+
+
 def scan_and_plan(cfg: Config, source: Source, answers: dict[str, str] | None = None, progress=None) -> Planned:
+    source = staged_source(cfg, source)
     result = scan(source, cfg.tz, progress=progress)
     planned = Planned(result, None, dt.datetime.now(cfg.tz), nas_index(cfg), targets(cfg), source, 0.0)
     return replan(cfg, planned, answers)
