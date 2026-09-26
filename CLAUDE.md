@@ -71,6 +71,12 @@ so tell Chris.
     thumbnails per set; Chris can leave out frames or whole sets, with a live rough Wi-Fi time estimate
     (assumed 10 MB/s until a staging run measures the real rate).
 20. **Left out on Select** → never read; offered for deletion on Clean-up, called out ("left out by you").
+21. **Catalog step (phase 5)** after Copy & verify: PROJECT_INFO, new `targets.csv` rows, index links +
+    `ZZ_TARGET_INDEX.md`, sibling-night notes (only added), `.flats_are_copies`, calibration-gap report,
+    decision-log drafts (in `STATE_DIR`, not written into the guide). Preview first, one approval.
+22. **Cross-night flats:** offered only when target, camera, scope and filter match, nights ≤ 7 days apart, and
+    rotation matches mod 180° within ±3° (never the unsolved 79°). **Default: don't borrow**; a bad flat is
+    worse than no flat.
 21. **Copy & verify (phase 4b):** one approval copies everything that's ready (staged, no open decision); the batch
     is a snapshot of exact operations in `STATE_DIR/ingest.sqlite3` plus `batches/<id>.tsv` and `logs/copy-<id>.log`.
     `fsops.py` is the only writer to the share: `.part` → fsync → hash must match the staging hash → no-clobber

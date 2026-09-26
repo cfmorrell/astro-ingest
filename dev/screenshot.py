@@ -20,6 +20,7 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=900)
     ap.add_argument("--click", action="append", default=[])
     ap.add_argument("--full", action="store_true", help="capture the full scrollable page")
+    ap.add_argument("--wait", type=int, default=0, help="extra milliseconds to wait before the screenshot")
     args = ap.parse_args()
 
     errors: list[str] = []
@@ -32,6 +33,7 @@ def main() -> int:
         for text in args.click:
             page.get_by_text(text, exact=False).first.click()
             page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(args.wait)
         page.screenshot(path=args.out, full_page=args.full)
         browser.close()
     print(f"saved {args.out}")

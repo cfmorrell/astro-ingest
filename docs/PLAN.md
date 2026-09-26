@@ -138,7 +138,7 @@ astro_ingest/
                    StaticFiles mounted last, as in the stacker
 static/            index.html + app.js + styles.css (stacker base + ingest section). Topbar: "astro-ingest",
                    version badge, "pull · file · clean", and an ASIAIR health badge (online @ IP / offline).
-                   Stepper: Connect → Scan → Review → Copy & verify → File → Clean up, one .card per step.
+                   Stepper: Connect → Scan → Review → Copy & verify → Catalog → Clean up, one .card per step.
                    Review is grouped per destination session: counts, sizes, and dst paths, with decisions as
                    chips/checklists, warnings as .session-mismatch-warning, and the ASIAIR _thn.jpg previews
                    in the stacker's lightbox. Also an active-jobs panel and a log view per job.
@@ -211,15 +211,23 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
 4. **Copy and verify into the sandbox** (now from staging, at disk speed). `fsops`, `jobs`, the op log, approval, and progress. Checksum
    already-ingested items against `ASTRO_NAS`. Test resume-after-kill and source drop mid-copy. Confirm the
    no-clobber rename on shfs.
-5. **Filing extras.** PROJECT_INFO for touched sessions, library reindex, multi-night split with `.flats_are_copies`
-   and notes, new targets (targets.csv row, then links) after approval, index links incl. `103-ByDate`, calneeds
-   report, and decision-log drafts.
+5. **Catalog (done 2026-09-26; Chris named the step).** After Copy & verify, for every copy batch not yet
+   catalogued: PROJECT_INFO.txt for touched sessions (and sessions a new library batch may affect), new
+   `targets.csv` rows (old file retired to `_to_delete/`), index links incl. `103-ByDate` and `ZZ_TARGET_INDEX.md`,
+   sibling-night lines in `.project_notes.txt` (only added), `.flats_are_copies`, a calibration-gap report, and
+   decision-log drafts in `STATE_DIR/decision-log-drafts.md`. Preview with diffs, one approval, fsops writes under
+   the lock, log in `STATE_DIR/logs/catalog-*.log`. Ports regression-checked against `/astro`: PROJECT_INFO content
+   identical except first-frame lines (the reference used directory order) and stale `_to_delete` alternates; the
+   182 live index links reproduced exactly. **Cross-night flats (§7.4)** are planned in Review: a "No flats"
+   decision, offered only for the same target/camera/scope/filter within 7 days and rotation mod 180° within ±3°
+   (never 79°); **default is don't borrow** ("a bad flat is worse than no flat"). Sandbox run on Splinter 06-15:
+   PROJECT_INFO (64 lights, 10 flats, 2026-08-29 library darks/bias), 13 links, re-preview empty.
 6. **Source cleanup.** Only verified, approved, gate-passed items. Before deleting, re-check source size and mtime
    against the scan. Delete each `.fit` **and** its `_thn.jpg` plus orphan thumbnails, prune empty non-structural
    dirs, and log every delete. Test against a scratch copy (`/astro-sandbox/_asiair-scratch`) with LocalDirSource.
    Test SMB deletes against a throwaway Samba share before the real ASIAIR is ever touched.
 6b. **Full-scale functional test, then a fine-detail review (Chris, 2026-09-25).** Once every step works end to
-   end (Connect → Scan → Stage → Review → Copy & verify → File → Clean up), run a full-size ingest of the sample and
+   end (Connect → Scan → Stage → Review → Copy & verify → Catalog → Clean up), run a full-size ingest of the sample and
    then go through the app screen by screen together for refinements: wording, layout, defaults, and anything that
    only shows up with real data at full scale. Basic functionality first, polish after.
 7. **Production.** App Dockerfile, a `docker-publish` workflow (same as the stacker), and a run script (`ASTRO_ROOT=/astro` rw, LAN access for discovery), put the app

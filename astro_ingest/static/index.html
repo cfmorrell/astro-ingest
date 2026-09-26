@@ -163,7 +163,7 @@
       </div>
       <div class="progress-wrap">
         <button id="copy-run-btn" class="primary">Approve &amp; copy</button>
-        <button id="copy-next-btn" class="ghost" disabled title="The Catalog step arrives in phase 5">Next: Catalog → (phase 5)</button>
+        <button id="copy-next-btn" class="ghost">Next: Catalog →</button>
       </div>
       <div id="copy-result"></div>
       <p class="hint">Copies each staged frame to its destination on the Astronomy share and checks it against the checksum taken when it was read from the device. Nothing is ever overwritten: a different file already at a destination is skipped and listed. A damaged NAS copy you chose to replace is moved to <code>_to_delete/</code> first. Staged copies are cleared as their NAS copies verify. Nothing on the device is touched.</p>
@@ -178,7 +178,35 @@
     </div>
   </section>
   <section class="step-panel" data-step="catalog">
-    <div class="card"><div class="card-title">Catalog</div><p class="empty-hint">Arrives in phase 5: PROJECT_INFO, new targets, index links, calibration report.</p></div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Catalog what was copied</div>
+        <div id="catalog-status-badge" class="badge">loading</div>
+      </div>
+      <div id="catalog-summary"></div>
+      <div id="catalog-progress" class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
+      </div>
+      <div class="progress-wrap">
+        <button id="catalog-run-btn" class="primary">Write catalog updates</button>
+        <button id="catalog-next-btn" class="ghost" disabled title="The Clean up step arrives in phase 6">Next: Clean up → (phase 6)</button>
+      </div>
+      <div id="catalog-result"></div>
+      <p class="hint">After Copy &amp; verify: writes <code>PROJECT_INFO.txt</code> for each session that received frames, adds new targets to <code>targets.csv</code> (the previous version is kept in <code>_to_delete/</code>), brings the index links (<code>100-</code>…<code>103-</code>) and <code>ZZ_TARGET_INDEX.md</code> up to date, adds sibling-night lines to <code>.project_notes.txt</code> (never edits them), and notes borrowed flats in <code>.flats_are_copies</code>. Reads only the NAS; nothing on the device is touched.</p>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">What will be written</div><div id="catalog-changes-badge" class="badge"></div></div>
+      <div id="catalog-changes"></div>
+    </div>
+    <div class="card" id="catalog-gaps-card" style="display:none;">
+      <div class="card-header"><div class="card-title">Calibration gaps</div><div class="badge">report only</div></div>
+      <div id="catalog-gaps"></div>
+    </div>
+    <div class="card" id="catalog-log-card" style="display:none;">
+      <div class="card-header"><div class="card-title">Decision-log drafts</div><div class="badge">saved in the state folder</div></div>
+      <div id="catalog-log"></div>
+    </div>
   </section>
   <section class="step-panel" data-step="clean">
     <div class="card"><div class="card-title">Clean up</div><p class="empty-hint">Arrives in phase 6: delete verified frames and their thumbnails from the ASIAIR, after your approval.</p></div>

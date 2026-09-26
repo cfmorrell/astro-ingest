@@ -115,3 +115,23 @@ def test_borrowed_flats_are_copied_and_noted(tmp_path):
     assert any("borrowed flats" in x for x in cv.log_lines)
     catalog.run(cfg, cv)
     assert "2026-09-23-SoulNebula-2600MC-Z61" in (root / s20 / ".flats_are_copies").read_text()
+
+
+def test_catalog_through_the_api(tmp_path):
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from astro_ingest.api import create_app
+    cfg, root, _ = copied(tmp_path)
+    client = TestClient(create_app(cfg))
+    pv = client.get("/api/catalog/preview").json()
+    assert pv["summary"]["project_info"]["create"] == 2 and "text" not in pv["changes"][0]
+    job = client.post("/api/catalog/run").json()["job_id"]
+    for _ in range(500):
+        snap = client.get(f"/jobs/{job}").json()
+        if snap["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.02)
+    assert snap["status"] == "succeeded", snap
+    assert client.get("/api/catalog/preview").json()["summary"]["writes"] == 0

@@ -6,7 +6,7 @@
 
 const STEPS = ["connect", "scan", "stage", "review", "copy", "catalog", "clean"];
 const STEP_LABELS = { connect: "Connect", scan: "Scan", stage: "Stage", review: "Review", copy: "Copy & verify", catalog: "Catalog", clean: "Clean up" };
-const STEP_PHASE = { catalog: "5", clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
+const STEP_PHASE = { clean: "6" };  // steps not built yet: shown, disabled, tagged with their phase
 const LARGE_GROUP_THRESHOLD = 20;  // beyond this, collapse to flagged frames +/- 2 neighbours (as astro-stacker)
 const SMALL_GROUP_PEERS = 10;      // fewer frames than this to compare against: scoring is less reliable (M42 04-11)
 const THUMB = 320;
@@ -42,6 +42,8 @@ const state = {
   collapsedDecisions: new Set(),  // decision ids Chris collapsed (this page view)
   copyPreview: null,     // /api/copy/preview: what approving now would copy
   lastBatch: null,       // the most recent copy batch
+  catalogPreview: null,  // /api/catalog/preview: what the Catalog step would write
+  catalogRunning: false,
   plan: null,
   itemsBySrc: {},
   expandedGroups: {},    // strip id -> Set of "start-end" collapsed ranges the user expanded
@@ -417,6 +419,10 @@ function stepStatus(step) {
     case "stage": return { available: planned, complete: planned && selectedItems().length > 0 && selectedItems().every((i) => i.staged) };
     case "review": return { available: planned, complete: planned && state.plan.summary.decisions_open === 0 };
     case "copy": return { available: planned, complete: !!(state.copyPreview && state.copyPreview.copies === 0 && state.lastBatch && state.lastBatch.status === "done") };
+    case "catalog": {
+      const c = state.catalogPreview;
+      return { available: true, complete: !!(c && !c.summary.batches.length && !c.summary.writes && state.lastBatch) };
+    }
     default: return { available: false, complete: false };
   }
 }
@@ -448,6 +454,7 @@ function showActiveStep() {
     panel.classList.toggle("visible", panel.dataset.step === state.activeStep);
   });
   renderStepper();
+  if (state.activeStep === "catalog" && !state.catalogRunning) loadCatalog();
 }
 
 // ---------- connect / scan ----------
@@ -835,6 +842,138 @@ async function runCopy() {
   }
 }
 
+// ---------- catalog ----------
+
+const CHANGE_GROUPS = [
+  ["project-info", "PROJECT_INFO.txt"], ["targets-csv", "targets.csv: new targets"],
+  ["notes", "Sibling nights (.project_notes.txt)"], ["flats-note", "Borrowed flats (.flats_are_copies)"],
+  ["links", "Index links (100-…103-)"], ["index-md", "ZZ_TARGET_INDEX.md"],
+];
+
+function diffBlock(text) {
+  return el("pre", { class: "session-path", style: "white-space:pre-wrap; margin:6px 0; font-size:12px;" }, [text]);
+}
+
+async function loadCatalog() {
+  setStepBadge("catalog-status-badge", "", "reading the NAS…");
+  try {
+    state.catalogPreview = await api("GET", "/api/catalog/preview");
+  } catch (e) {
+    setStepBadge("catalog-status-badge", "danger", "error");
+    const box = document.getElementById("catalog-summary");
+    box.innerHTML = "";
+    box.appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+    return;
+  }
+  renderCatalog();
+  renderStepper();
+}
+
+function renderCatalog() {
+  const pv = state.catalogPreview;
+  if (!pv) return;
+  const s = pv.summary;
+  const pi = s.project_info;
+  const box = document.getElementById("catalog-summary");
+  box.innerHTML = "";
+  box.appendChild(el("div", { class: "stat-row" }, [
+    stat(String(s.batches.length), `copy batch${s.batches.length === 1 ? "" : "es"} not catalogued yet`, s.batches.length ? "ok" : ""),
+    stat(String(pi.create + pi.update), `PROJECT_INFO to write · ${pi.unchanged} unchanged`),
+    stat(String(s.new_targets.length), "new targets"),
+    stat(`+${s.links_added} / −${s.links_removed}`, "index links"),
+  ]));
+  const btn = document.getElementById("catalog-run-btn");
+  if (!state.catalogRunning) {
+    btn.disabled = !s.writes && !s.batches.length;
+    btn.textContent = s.writes ? `Write ${s.writes} catalog update${s.writes === 1 ? "" : "s"}` : s.batches.length ? "Mark as catalogued" : "Nothing to write";
+  }
+  setStepBadge("catalog-status-badge", s.writes ? "" : "ok", s.writes ? "awaiting approval" : "up to date");
+  if (!state.catalogRunning) {
+    const prog = document.getElementById("catalog-progress");
+    prog.querySelector(".progress-fill").style.width = s.writes ? "0%" : "100%";
+    prog.querySelector(".pct").textContent = s.writes ? "0%" : "100%";
+    prog.querySelector(".msg").textContent = s.writes ? "waiting for your approval" : "catalog is up to date";
+  }
+
+  const list = document.getElementById("catalog-changes");
+  list.innerHTML = "";
+  const todo = pv.changes.filter((c) => c.status !== "unchanged");
+  setStepBadge("catalog-changes-badge", "", `${todo.length} change${todo.length === 1 ? "" : "s"}`);
+  if (!todo.length) list.appendChild(el("div", { class: "empty-hint" }, ["Nothing to write: the catalog matches what's on the NAS."]));
+  CHANGE_GROUPS.forEach(([kind, label]) => {
+    const rows = todo.filter((c) => (kind === "links" ? c.kind.startsWith("link-") : c.kind === kind));
+    if (!rows.length) return;
+    const block = el("div", { class: "night-block" }, [el("div", { style: "display:flex; gap:8px; align-items:center;" }, [
+      el("span", { class: "badge accent" }, [String(rows.length)]), el("strong", {}, [label])])]);
+    if (kind === "links") {
+      block.appendChild(toggleList(`show ${rows.length} link${rows.length === 1 ? "" : "s"}`, rows.map((c) =>
+        el("div", { class: "session-path" }, [c.kind === "link-add" ? `+ ${c.path} → ${c.target}` : `− ${c.path}  (${c.why})`]))));
+    } else {
+      rows.forEach((c) => block.appendChild(el("div", {}, [
+        el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap;" }, [
+          el("span", { class: `badge ${c.status === "create" ? "ok" : ""}` }, [c.status]),
+          el("span", { class: "session-path" }, [c.path]),
+          c.why ? el("span", { class: "hint", style: "margin:0;" }, [c.why]) : null,
+        ]),
+        c.diff ? toggleList(c.status === "create" ? "show contents" : "show changes", [diffBlock(c.diff)]) : null,
+      ])));
+    }
+    list.appendChild(block);
+  });
+
+  const gaps = document.getElementById("catalog-gaps");
+  gaps.innerHTML = "";
+  document.getElementById("catalog-gaps-card").style.display = pv.gaps.length ? "block" : "none";
+  pv.gaps.forEach((g) => gaps.appendChild(el("div", { class: "session-mismatch-warning" }, [
+    `⚠ ${g.kind} ${g.camera || "?"}${g.kind === "Dark" ? ` ${g.exposure}s` : ""} gain ${g.gain} offset ${g.offset}: ${g.problem} — ${g.session}`])));
+  const log = document.getElementById("catalog-log");
+  log.innerHTML = "";
+  document.getElementById("catalog-log-card").style.display = pv.log_lines.length ? "block" : "none";
+  if (pv.log_lines.length) log.appendChild(diffBlock(pv.log_lines.join("\n")));
+}
+
+function renderCatalogResult(res) {
+  const box = document.getElementById("catalog-result");
+  box.innerHTML = "";
+  if (!res) return;
+  const parts = Object.entries(res.by_kind).map(([k, n]) => `${n} ${k}`).join(", ");
+  box.appendChild(el("div", { class: "hint" }, [
+    `Wrote ${res.writes} update${res.writes === 1 ? "" : "s"}${parts ? ` (${parts})` : ""}; ${res.batches.length} batch${res.batches.length === 1 ? "" : "es"} marked catalogued${res.decision_log_drafts ? `; ${res.decision_log_drafts} decision-log draft line${res.decision_log_drafts === 1 ? "" : "s"} saved` : ""}. Log: ${res.log}`,
+  ]));
+  const skipped = Object.entries(res.by_kind).filter(([k]) => / (clash|skipped)$/.test(k));
+  if (skipped.length) box.appendChild(el("div", { class: "session-mismatch-warning" }, [`⚠ not written (something already there): ${skipped.map(([k, n]) => `${n} ${k}`).join(", ")}`]));
+}
+
+async function watchCatalogJob(jobId) {
+  const btn = document.getElementById("catalog-run-btn");
+  state.catalogRunning = true;
+  btn.disabled = true;
+  btn.textContent = "Writing…";
+  await pollJob(jobId, document.getElementById("catalog-progress"), async (snap) => {
+    state.catalogRunning = false;
+    if (snap.status === "succeeded") renderCatalogResult(snap.result);
+    else {
+      document.getElementById("catalog-result").innerHTML = "";
+      document.getElementById("catalog-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "catalog failed"]));
+    }
+    await loadCatalog();
+  });
+}
+
+async function runCatalog() {
+  const s = state.catalogPreview.summary;
+  const what = s.writes ? `Write ${s.writes} catalog update${s.writes === 1 ? "" : "s"} on the NAS? Nothing is deleted: a replaced targets.csv goes to _to_delete/.`
+    : "Nothing to write. Mark the copy batches as catalogued?";
+  if (!confirm(what)) return;
+  try {
+    const { job_id } = await api("POST", "/api/catalog/run");
+    await watchCatalogJob(job_id);
+  } catch (e) {
+    document.getElementById("catalog-result").innerHTML = "";
+    document.getElementById("catalog-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+  }
+}
+
 // ---------- review ----------
 
 function renderReview() {
@@ -1099,6 +1238,8 @@ async function resumeRunningJob() {
     if (stage) { state.activeStep = "stage"; showActiveStep(); await watchStageJob(stage.id); }
     const copying = jobsNow.find((j) => j.kind === "copy" && j.status === "running");
     if (copying) { state.activeStep = "copy"; showActiveStep(); await watchCopyJob(copying.id); }
+    const cataloguing = jobsNow.find((j) => j.kind === "catalog" && j.status === "running");
+    if (cataloguing) { state.activeStep = "catalog"; showActiveStep(); await watchCatalogJob(cataloguing.id); }
     const running = jobsNow.find((j) => j.kind === "quality" && j.status === "running");
     if (running) await watchQualityJob(running.id);
   } catch (e) { /* ignore */ }
@@ -1165,6 +1306,7 @@ document.getElementById("select-next-btn").addEventListener("click", () => { sta
 document.getElementById("stage-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
 document.getElementById("copy-run-btn").addEventListener("click", runCopy);
+document.getElementById("catalog-run-btn").addEventListener("click", runCatalog);
 document.getElementById("review-next-btn").addEventListener("click", () => { state.activeStep = "copy"; showActiveStep(); });
 document.getElementById("copy-next-btn").addEventListener("click", () => { state.activeStep = "catalog"; showActiveStep(); });
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });
