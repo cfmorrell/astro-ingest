@@ -15,6 +15,7 @@ from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from astro_ingest import analysis, jobs, service, state
+from astro_ingest.sources import devices, discover
 from astro_ingest.config import VERSION, Config
 from astro_ingest.core import imaging
 
@@ -85,6 +86,48 @@ def create_app(cfg: Config) -> FastAPI:
                 raise HTTPException(400, f"unsupported answer {key!r}={value!r} in this phase")
         service.set_answers(cfg, updates)
         return plan_json(replan())
+
+    # ---------------- capture devices (discovery is read-only on the devices)
+
+    found: dict[str, list] = {}
+
+    def devices_json(choice=None) -> dict:
+        remembered = service.remembered_device(cfg)
+        return {
+            "source_mode": "local" if cfg.asiair_root else "smb",
+            "local_root": str(cfg.asiair_root) if cfg.asiair_root else None,
+            "remembered": remembered,
+            "found": [d.to_dict() | {"display": d.display, "remembered": devices.is_remembered(d, remembered)}
+                      for d in found.get("devices", [])],
+            "choice": None if choice is None else {"status": choice.status, "message": choice.message,
+                                                   "host": choice.device.host if choice.device else None},
+            "subnet": cfg.asiair_subnet,
+        }
+
+    @app.get("/api/devices")
+    def get_devices():
+        return devices_json()
+
+    @app.post("/api/devices/find")
+    def find_devices(full: bool = Body(False, embed=True)):
+        remembered = service.remembered_device(cfg)
+        hints = [h for h in ([remembered["host"]] if remembered else []) + [cfg.asiair_host] if h]
+        d = discover.discover(cfg.asiair_subnet, hints, remembered, full=full)
+        found["devices"] = d.devices
+        choice = devices.choose(d.devices, remembered)
+        if choice.status == "only-one":
+            service.remember_device(cfg, choice.device)
+        return devices_json(choice) | {"scanned": d.scanned, "seconds": d.seconds, "errors": d.errors}
+
+    @app.post("/api/devices/select")
+    def select_device(host: str = Body(...), nickname: str | None = Body(None)):
+        match = [d for d in found.get("devices", []) if d.host == host]
+        if len(match) != 1:
+            raise HTTPException(404, "no such device in the last search: run Find again")
+        service.remember_device(cfg, match[0], (nickname or "").strip() or None)
+        with lock:
+            cache.pop("plan", None)  # the source may have changed
+        return devices_json()
 
     # ---------------- previews (astro-stacker's rendering, cached in CACHE_DIR)
 

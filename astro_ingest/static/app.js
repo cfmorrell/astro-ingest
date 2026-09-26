@@ -37,6 +37,7 @@ const CLEANUP_LABELS = {
 const state = {
   activeStep: "review",
   health: null,
+  devices: null,         // /api/devices: source mode, remembered device, last search
   plan: null,
   itemsBySrc: {},
   expandedGroups: {},    // strip id -> Set of "start-end" collapsed ranges the user expanded
@@ -445,13 +446,77 @@ function showActiveStep() {
 
 // ---------- connect / scan ----------
 
+function describeDevice(d) {
+  if (!d) return "none";
+  const where = `${d.label} at ${d.host}`;
+  return d.nickname ? `${d.nickname} (${where})` : where;
+}
+
 function renderConnect() {
   const h = state.health;
   const body = document.getElementById("connect-body");
   body.innerHTML = "";
   if (!h) return;
   setStepBadge("connect-status-badge", h.source_online ? "ok" : "danger", h.source_online ? "online" : "offline");
-  body.appendChild(el("div", { class: "session-path" }, [h.source]));
+  const dv = state.devices;
+  if (dv && dv.source_mode === "local") {
+    body.appendChild(el("div", {}, ["Reading from a local folder (ASIAIR_ROOT): ", el("span", { class: "session-path" }, [dv.local_root])]));
+    body.appendChild(el("div", { class: "hint" }, [`Your capture device: ${describeDevice(dv.remembered)}. It is used whenever ASIAIR_ROOT is not set.`]));
+  } else {
+    body.appendChild(el("div", {}, ["Reading from ", el("b", {}, [dv ? describeDevice(dv.remembered) : "…"]), " over the network: ", el("span", { class: "session-path" }, [h.source])]));
+  }
+}
+
+function renderFindResult(res) {
+  const box = document.getElementById("find-result");
+  box.innerHTML = "";
+  if (!res) return;
+  const status = res.choice ? res.choice.status : null;
+  box.appendChild(el("div", { class: status === "ask" ? "session-mismatch-warning" : "hint", style: "margin-bottom:8px;" }, [
+    res.choice ? res.choice.message : "",
+    res.seconds !== undefined ? `  (searched ${res.scanned} address${res.scanned === 1 ? "" : "es"} on ${res.subnet} in ${res.seconds}s)` : "",
+  ]));
+  Object.entries(res.errors || {}).forEach(([host, err]) => box.appendChild(el("div", { class: "hint" }, [`${host}: couldn't identify (${err})`])));
+  res.found.forEach((d) => {
+    const nameInput = el("input", { type: "text", placeholder: "your name for it, e.g. ASIAIR Color", value: d.remembered && res.remembered ? (res.remembered.nickname || "") : "" }, []);
+    box.appendChild(el("div", { class: "night-block" }, [
+      el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap;" }, [
+        el("span", { class: `badge ${d.remembered ? "ok" : "accent"}` }, [d.remembered ? "yours" : d.label]),
+        el("span", { class: "session-path" }, [d.host]),
+        el("span", { class: "hint", style: "margin:0;" }, [d.name ? `network name ${d.name}` : ""]),
+      ]),
+      el("div", { class: "session-meta" }, [`${d.label} · share “${d.share}” · folders: ${d.folders.filter((f) => !f.startsWith(".")).join(", ")}`]),
+      el("div", { style: "display:flex; gap:6px; align-items:center;" }, [
+        nameInput,
+        el("button", {
+          class: d.remembered ? "ghost small" : "small",
+          onclick: async () => {
+            state.devices = await api("POST", "/api/devices/select", { host: d.host, nickname: nameInput.value });
+            await loadHealth();
+            renderFindResult(Object.assign({}, res, state.devices, { choice: { status: "remembered", message: `Using ${describeDevice(state.devices.remembered)}.` }, found: state.devices.found }));
+            await loadPlan(false);
+          },
+        }, [d.remembered ? "Save name" : "Use this device"]),
+      ]),
+    ]));
+  });
+}
+
+async function findDevices(full) {
+  const btns = [document.getElementById("find-btn"), document.getElementById("find-all-btn")];
+  btns.forEach((b) => { b.disabled = true; });
+  document.getElementById("find-result").innerHTML = "";
+  document.getElementById("find-result").appendChild(el("div", { class: "hint" }, ["Searching…"]));
+  try {
+    const res = await api("POST", "/api/devices/find", { full });
+    state.devices = res;
+    renderFindResult(res);
+    await loadHealth();
+  } catch (e) {
+    document.getElementById("find-result").innerHTML = "";
+    document.getElementById("find-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+  }
+  btns.forEach((b) => { b.disabled = false; });
 }
 
 function renderScan() {
@@ -691,11 +756,14 @@ function applyPlan(plan) {
 
 async function loadHealth() {
   try {
+    state.devices = state.devices || await api("GET", "/api/devices");
     state.health = await api("GET", "/health");
     setStepBadge("health-badge", state.health.status === "ok" ? "ok" : "danger", state.health.status === "ok" ? "online" : "error");
     if (state.health.version) document.getElementById("app-version").textContent = `v${state.health.version}`;
     const src = document.getElementById("source-badge");
-    src.textContent = state.health.source_online ? "ASIAIR: online" : "ASIAIR: offline";
+    const dv = state.devices;
+    const who = dv && dv.source_mode === "local" ? "local folder" : (dv && dv.remembered ? (dv.remembered.nickname || dv.remembered.label) : "ASIAIR");
+    src.textContent = `${who}: ${state.health.source_online ? "online" : "offline"}`;
     src.className = `badge ${state.health.source_online ? "ok" : "warn"}`;
     src.title = state.health.source;
   } catch (e) {
@@ -727,6 +795,8 @@ document.getElementById("rescan-btn").addEventListener("click", async (e) => {
 document.getElementById("scan-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "review"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
+document.getElementById("find-btn").addEventListener("click", () => findDevices(false));
+document.getElementById("find-all-btn").addEventListener("click", () => findDevices(true));
 document.getElementById("quality-sigma-btn").addEventListener("click", async () => {
   const v = document.getElementById("quality-sigma").value;
   applyPlan(await api("POST", "/api/answers", { "quality-sigma": v }));

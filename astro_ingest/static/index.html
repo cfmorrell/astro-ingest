@@ -26,7 +26,12 @@
         <div id="connect-status-badge" class="badge">checking</div>
       </div>
       <div id="connect-body"></div>
-      <p class="hint">Finding the ASIAIR on the home network and connecting to its <code>EMMC Images</code> share directly arrives in phase 3. Until then the source is the local folder in <code>ASIAIR_ROOT</code>.</p>
+      <div class="progress-wrap">
+        <button id="find-btn" class="primary">Find devices</button>
+        <button id="find-all-btn" class="ghost">Search the whole network</button>
+      </div>
+      <div id="find-result" style="margin-top:12px;"></div>
+      <p class="hint">Looks for capture devices on the home network (today: ZWO ASIAIR). Finding a device only logs in as guest and lists the top of its share; nothing on it is opened, changed or deleted.</p>
     </div>
   </section>
 
