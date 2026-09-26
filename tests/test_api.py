@@ -118,3 +118,27 @@ def test_device_find_and_select(tmp_path, monkeypatch):
     monkeypatch.setattr(disc, "discover", lambda *a, **k: disc.Discovery(found[:1], ["192.168.1.43"], 254, 2.4))
     res = client.post("/api/devices/find", json={"full": True}).json()
     assert res["choice"]["status"] == "ask" and "ASIAIR Mono" in res["choice"]["message"]   # never a silent switch
+
+
+def test_answering_decisions(tmp_path):
+    client, air, _ = make_app(tmp_path)
+    for i in range(4):   # an object with no target in targets.csv -> a "target" decision
+        asiair_frame(air, "Plan/Light/NGC 4565", "Light", f"20260427-21{i}000", obj="NGC 4565", seq=i + 1,
+                     FOCALLEN=1384, data=star_field(seed=i))
+    plan = client.post("/api/scan") and client.get("/api/plan").json()
+    d = next(x for x in plan["decisions"] if x["kind"] == "target")
+    assert d["resolved"] is None
+
+    for bad in ("new:needle galaxy", "new:Needle'sGalaxy", "new:", "some-other-value"):
+        assert client.post("/api/answers", json={d["id"]: bad}).status_code == 400
+    assert client.post("/api/answers", json={"target-doesnotexist": "skip"}).status_code == 400
+
+    plan = client.post("/api/answers", json={d["id"]: "new:NeedleGalaxy-NGC4565"}).json()
+    d2 = next(x for x in plan["decisions"] if x["id"] == d["id"])
+    assert d2["answer"] == "new:NeedleGalaxy-NGC4565"
+    assert any(s["rel"].startswith("NeedleGalaxy-NGC4565/2026-04-27-NeedleGalaxy-2600MC-RC6") for s in plan["sessions"])
+
+    plan = client.post("/api/answers", json={d["id"]: "skip"}).json()
+    assert next(x for x in plan["decisions"] if x["id"] == d["id"])["answer"] == "skip"
+    plan = client.post("/api/answers", json={d["id"]: None}).json()           # reset
+    assert next(x for x in plan["decisions"] if x["id"] == d["id"])["resolved"] is None

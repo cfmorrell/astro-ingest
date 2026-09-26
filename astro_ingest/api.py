@@ -8,6 +8,7 @@ never shadows an API route.
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 from pathlib import Path, PurePosixPath
 
@@ -84,14 +85,17 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/answers")
     def post_answers(updates: dict[str, str | None] = Body(...)):
-        """Merge answers ({key: value}, null removes): per-frame keep/reject ("keep:<source rel>": "keep" | "reject"),
-        Select-step exclusions ("exclude:<source rel>": "1") and the sensitivity ("quality-sigma")."""
+        """Merge answers ({key: value}, null removes): decision answers ({decision id: one of its options, or
+        "new:<TargetFolder>"}), per-frame keep/reject ("keep:<source rel>": "keep" | "reject"), Scan-step exclusions
+        ("exclude:<source rel>": "1") and the sensitivity ("quality-sigma")."""
+        decisions = {d.id: d for d in planned().plan.decisions}
         for key, value in updates.items():
             ok = (key.startswith("keep:") and value in ("keep", "reject", None)) or \
                  (key.startswith("exclude:") and value in ("1", None)) or \
-                 (key == analysis.SIGMA_KEY and (value is None or _is_sigma(value)))
+                 (key == analysis.SIGMA_KEY and (value is None or _is_sigma(value))) or \
+                 (key in decisions and (value is None or _valid_decision_answer(decisions[key], value)))
             if not ok:
-                raise HTTPException(400, f"unsupported answer {key!r}={value!r} in this phase")
+                raise HTTPException(400, f"unsupported answer {key!r}={value!r}")
         service.set_answers(cfg, updates)
         return plan_json(replan())
 
@@ -263,3 +267,16 @@ def _is_sigma(value: str) -> bool:
         return 1.0 <= float(value) <= 10.0
     except ValueError:
         return False
+
+
+# A target folder as the share names them: CamelCase name, then catalog parts ("NeedleGalaxy-NGC4565",
+# "GhostNebula-Sh2-136", "MarkariansChain"); no spaces, apostrophes, & or parentheses (ORGANIZATION_GUIDE §3).
+_TARGET_FOLDER = re.compile(r"^[A-Z][A-Za-z0-9]*(-[A-Za-z0-9]+)*$")
+
+
+def _valid_decision_answer(decision, value: str) -> bool:
+    options = [o["value"] for o in decision.options]
+    if value in options:
+        return True
+    return value.startswith("new:") and any(o.startswith("new:") for o in options) and \
+        bool(_TARGET_FOLDER.match(value[4:]))

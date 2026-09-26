@@ -39,6 +39,7 @@ const state = {
   activeStep: "connect",  // the flow starts at the beginning and works left to right across the stepper
   health: null,
   devices: null,         // /api/devices: source mode, remembered device, last search
+  collapsedDecisions: new Set(),  // decision ids Chris collapsed (this page view)
   plan: null,
   itemsBySrc: {},
   expandedGroups: {},    // strip id -> Set of "start-end" collapsed ranges the user expanded
@@ -734,6 +735,58 @@ function renderReview() {
   renderCleanup(p);
 }
 
+async function answerDecision(d, value) {
+  try {
+    applyPlan(await api("POST", "/api/answers", { [d.id]: value }));
+  } catch (e) {
+    alert(`Couldn't save that answer: ${e.message || e}`);
+  }
+}
+
+function decisionChips(d) {
+  // A new-target answer carries the folder Chris chose ("new:NeedleGalaxy-NGC4565"), which differs from the
+  // proposal in the option ("new:NGC4565"): match on the "new:" prefix and show the chosen name.
+  const isNew = (v) => v !== null && v.startsWith("new:");
+  const isChosen = (o) => o.value === d.resolved || (isNew(o.value) && isNew(d.resolved));
+  const wrap = el("div", {}, []);
+  const nameRow = el("div", { class: "field-row", style: "display:none; align-items:center; margin:-4px 0 10px;" }, []);
+  const chips = el("div", { class: "checklist" }, d.options.map((o) => {
+    const chosenName = isChosen(o) && isNew(d.resolved) ? d.resolved.slice(4) : "";
+    const label = o.label + (isNew(o.value) && (chosenName || o.value.length > 4) ? ` (${chosenName || o.value.slice(4)})` : "");
+    return el("label", {
+      class: `chip${isChosen(o) ? " checked" : ""}`,
+      onclick: (e) => {
+        e.preventDefault();
+        if (isNew(o.value)) {
+          // a new target needs its folder name: ask for it inline
+          nameRow.style.display = "flex";
+          nameRow.querySelector("input").focus();
+          return;
+        }
+        if (o.value !== d.resolved || d.answer === null) answerDecision(d, o.value);
+      },
+    }, [
+      el("input", Object.assign({ type: "radio", name: d.id }, isChosen(o) ? { checked: "checked" } : {}), []),
+      label,
+    ]);
+  }));
+  const newOpt = d.options.find((o) => isNew(o.value));
+  if (newOpt) {
+    const current = isNew(d.resolved) ? d.resolved.slice(4) : newOpt.value.slice(4);
+    const input = el("input", { type: "text", value: current, placeholder: "e.g. NeedleGalaxy-NGC4565", style: "width:280px;" }, []);
+    const save = () => answerDecision(d, `new:${input.value.trim()}`);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+    nameRow.appendChild(el("div", { class: "field", style: "margin:0; flex:0 0 auto;" }, [
+      el("label", {}, ["Target folder name (CamelCase name, then catalog: no spaces or special characters)"]),
+      el("div", { style: "display:flex; gap:6px;" }, [input, el("button", { class: "small primary", onclick: save }, ["Save"]),
+        el("button", { class: "small ghost", onclick: () => { nameRow.style.display = "none"; } }, ["Cancel"])]),
+    ]));
+  }
+  wrap.appendChild(chips);
+  wrap.appendChild(nameRow);
+  return wrap;
+}
+
 function renderDecisions(p) {
   const card = document.getElementById("decisions-card");
   const list = document.getElementById("decisions-list");
@@ -744,26 +797,31 @@ function renderDecisions(p) {
   const rank = (d) => (d.answer !== null ? 2 : d.resolved === null ? 0 : 1);  // open first, then defaulted, then answered
   [...p.decisions].sort((a, b) => rank(a) - rank(b)).forEach((d) => {
     const cls = d.answer !== null ? "answered" : d.resolved === null ? "" : "defaulted";
-    // A new-target answer carries the folder Chris chose ("new:NeedleGalaxy-NGC4565"), which differs from the
-    // proposal in the option ("new:NGC4565"): match on the "new:" prefix and show the chosen name.
-    const isChosen = (o) => o.value === d.resolved || (o.value.startsWith("new:") && d.resolved !== null && d.resolved.startsWith("new:"));
-    const newName = (o) => (isChosen(o) && d.resolved.startsWith("new:") ? d.resolved : o.value).slice(4);
-    const chips = el("div", { class: "checklist" }, d.options.map((o) => el("label", { class: `chip${isChosen(o) ? " checked" : ""}` }, [
-      el("input", Object.assign({ type: "radio", name: d.id, disabled: "disabled" }, isChosen(o) ? { checked: "checked" } : {}), []),
-      o.label + (o.value.startsWith("new:") && newName(o) ? ` (${newName(o)})` : ""),
-    ])));
+    const collapsed = state.collapsedDecisions.has(d.id);
     const files = d.items.map((src) => state.itemsBySrc[src]).filter(Boolean);
-    list.appendChild(el("div", { class: `decision ${cls}` }, [
-      el("div", {}, [
-        el("span", { class: `badge ${d.resolved === null ? "warn" : "accent"}` }, [d.kind]),
-        " ",
-        el("span", { class: "hint" }, [d.answer !== null ? "answered" : d.resolved === null ? "needs your answer" : `default: ${d.resolved}`]),
-      ]),
-      el("div", { class: "decision-question" }, [d.question]),
-      chips,
-      frameStrip(`decision-${d.id}`, files),
-      files.length ? toggleList(`show ${files.length} file${files.length === 1 ? "" : "s"}`, files.map((i) => itemRow(i))) : null,
-    ]));
+    const toggle = () => {
+      if (collapsed) state.collapsedDecisions.delete(d.id); else state.collapsedDecisions.add(d.id);
+      renderDecisions(state.plan);
+    };
+    const header = el("div", { class: "decision-header", onclick: toggle, title: collapsed ? "expand" : "collapse" }, [
+      el("span", { class: "decision-chevron" }, [collapsed ? "▸" : "▾"]),
+      el("span", { class: `badge ${d.resolved === null ? "warn" : "accent"}` }, [d.kind]),
+      el("span", { class: "hint", style: "margin:0;" }, [d.answer !== null ? `answered: ${d.answer}` : d.resolved === null ? "needs your answer" : `default: ${d.resolved}`]),
+      d.answer !== null ? el("span", {
+        class: "toggle-adv", style: "margin:0 0 0 auto;",
+        onclick: (e) => { e.stopPropagation(); answerDecision(d, null); },
+        title: "forget this answer (back to the default, or open)",
+      }, ["reset"]) : null,
+    ]);
+    const body = collapsed
+      ? [el("div", { class: "decision-question collapsed" }, [d.question])]
+      : [
+        el("div", { class: "decision-question" }, [d.question]),
+        decisionChips(d),
+        frameStrip(`decision-${d.id}`, files),
+        files.length ? toggleList(`show ${files.length} file${files.length === 1 ? "" : "s"}`, files.map((i) => itemRow(i))) : null,
+      ];
+    list.appendChild(el("div", { class: `decision ${cls}` }, [header, ...body]));
   });
 }
 

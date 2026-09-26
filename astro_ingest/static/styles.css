@@ -1416,3 +1416,25 @@ button.danger-outline:hover {
   align-items: center;
   flex-wrap: wrap;
 }
+
+/* decisions: click the header to collapse/expand; collapsed shows the question on one line */
+.decision-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.decision-chevron {
+  color: var(--text-dim);
+  width: 12px;
+}
+
+.decision-question.collapsed {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  margin-bottom: 0;
+}
