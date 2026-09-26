@@ -189,6 +189,10 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    `/jobs`), stats in `STATE_DIR/quality.json`, renders in `CACHE_DIR`. Flagged lights are `rejected` by default
    (σ 4.0), keepable per frame; stacker-style cards, lightbox and metric strips. Checked against Chris's own
    hand-rejections: all 17 dawn frames from ET 09-14 / Heart 09-15 flagged at σ 4.0.
+   *Network contingency (Chris, 2026-09-25):* scoring reads every light once before copying, and the copy reads it
+   again. If SMB from the ASIAIR proves too slow (measure in phase 3), re-sequence: copy whole groups first, score on
+   the NAS, then **retire** excluded frames to the session's `_to_delete/` (never delete on the NAS) and let cleanup
+   remove them from the ASIAIR as usual. Decide after seeing real throughput.
 3. **ASIAIR discovery and SmbSource (read-only against the real device).** Build `discover.py` and `smb.py`, plus the
    dashboard status and Find button. Test with a fake network in unit tests. Against the live ASIAIR, only list and
    read. Check SMB throughput and reconnect behavior.

@@ -8,6 +8,7 @@ const STEPS = ["connect", "scan", "review", "copy", "file", "clean"];
 const STEP_LABELS = { connect: "Connect", scan: "Scan", review: "Review", copy: "Copy & verify", file: "File", clean: "Clean up" };
 const STEP_PHASE = { copy: 4, file: 5, clean: 6 };  // steps not built yet: shown, disabled, tagged with their phase
 const LARGE_GROUP_THRESHOLD = 20;  // beyond this, collapse to flagged frames +/- 2 neighbours (as astro-stacker)
+const SMALL_GROUP_PEERS = 10;      // fewer frames than this to compare against: scoring is less reliable (M42 04-11)
 const THUMB = 320;
 const FULL = 1600;
 
@@ -379,7 +380,11 @@ function qualityToolbar(group, items) {
   if (!scored.length) return el("div", { class: "hint", style: "margin-top:6px;" }, ["Light frames not scored yet: use “Score light frames” above."]);
   const flagged = items.filter(isFlagged).filter((i) => ["copy", "append", "rejected"].includes(i.action));
   const kept = flagged.filter(isKept);
-  const bits = [el("span", { class: "hint", style: "margin:0;" }, [`${scored.length} scored against ${scored[0].quality.peers} frames · ${flagged.length} flagged${kept.length ? ` · ${kept.length} kept anyway` : ""}`])];
+  const peers = scored[0].quality.peers;
+  const bits = [el("span", { class: "hint", style: "margin:0;" }, [`${scored.length} scored against ${peers} frames · ${flagged.length} flagged${kept.length ? ` · ${kept.length} kept anyway` : ""}`])];
+  if (peers < SMALL_GROUP_PEERS) {
+    bits.push(el("span", { class: "badge warn", title: "Frames are judged against the rest of their group; with this few to compare against, poor frames can slip through and good ones can be flagged. Check them by eye." }, [`small group: only ${peers} frames to compare, scoring is less reliable`]));
+  }
   if (kept.length) bits.push(el("button", { class: "small", onclick: () => setFrameChoice(kept, () => null) }, ["✓ Accept recommendations"]));
   if (flagged.length && kept.length < flagged.length) bits.push(el("button", { class: "small ghost", onclick: () => setFrameChoice(flagged, () => "keep") }, ["Keep all flagged"]));
   const open = state.chartsOpen.has(group.id);
