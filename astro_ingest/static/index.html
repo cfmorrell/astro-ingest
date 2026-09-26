@@ -111,6 +111,9 @@
         <div class="progress-bar"><div class="progress-fill"></div></div>
         <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
       </div>
+      <div class="progress-wrap">
+        <button id="review-next-btn" class="primary">Next: Copy &amp; verify →</button>
+      </div>
       <p class="hint">Each light frame is scored against the rest of its group (star count, FWHM, eccentricity, SNR, sky background), the same way astro-stacker reviews lights. Red-bordered frames are recommended <b>not</b> to be ingested; click one to see why, and keep it if you disagree. Decisions and the copy itself arrive in phase 4.</p>
     </div>
 
@@ -160,6 +163,7 @@
       </div>
       <div class="progress-wrap">
         <button id="copy-run-btn" class="primary">Approve &amp; copy</button>
+        <button id="copy-next-btn" class="ghost" disabled title="The File step arrives in phase 5">Next: File → (phase 5)</button>
       </div>
       <div id="copy-result"></div>
       <p class="hint">Copies each staged frame to its destination on the Astronomy share and checks it against the checksum taken when it was read from the device. Nothing is ever overwritten: a different file already at a destination is skipped and listed. A damaged NAS copy you chose to replace is moved to <code>_to_delete/</code> first. Staged copies are cleared as their NAS copies verify. Nothing on the device is touched.</p>

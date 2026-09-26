@@ -1165,6 +1165,8 @@ document.getElementById("select-next-btn").addEventListener("click", () => { sta
 document.getElementById("stage-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
 document.getElementById("copy-run-btn").addEventListener("click", runCopy);
+document.getElementById("review-next-btn").addEventListener("click", () => { state.activeStep = "copy"; showActiveStep(); });
+document.getElementById("copy-next-btn").addEventListener("click", () => { state.activeStep = "file"; showActiveStep(); });
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
 document.getElementById("find-btn").addEventListener("click", () => findDevices(false));
