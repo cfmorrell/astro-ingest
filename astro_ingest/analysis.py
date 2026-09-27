@@ -127,12 +127,18 @@ def targets_by_group(cfg: Config, source: Source, scan: Scan, index: NasIndex, p
     return out
 
 
+def scoring_todo(cfg: Config, targets: dict[str, list[ScoreTarget]], store: "QualityStore | None" = None) -> list:
+    """The targets still to score (or whose preview still has to be rendered)."""
+    store = store or QualityStore(cfg)
+    return [t for ts in targets.values() for t in ts if t.readable and (
+            store.get(t.key) is None or (t.thumb_key and not render_path(cfg, t.thumb_key, THUMB_SIZE).is_file()))]
+
+
 def run_scoring(cfg: Config, targets: dict[str, list[ScoreTarget]], progress: Callable[..., None]) -> dict:
     # progress(pct, message, scored=n, to_score=total)
     """Score (and thumbnail) every target not already in the store. Returns counts for the job result."""
     store = QualityStore(cfg)
-    todo = [t for ts in targets.values() for t in ts if t.readable and (
-            store.get(t.key) is None or (t.thumb_key and not render_path(cfg, t.thumb_key, THUMB_SIZE).is_file()))]
+    todo = scoring_todo(cfg, targets, store)
     done = failed = 0
     started = time.time()
     for n, t in enumerate(todo, 1):

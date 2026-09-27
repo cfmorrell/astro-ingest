@@ -126,3 +126,35 @@ def test_copy_through_the_api(tmp_path):
     assert client.get("/api/copy/preview").json()["copies"] == 0              # re-indexed: nothing left
     assert client.post("/api/copy/run").status_code == 400
     assert client.get("/api/batches").json()["batches"][0]["status"] == "done"
+
+
+def _damaged_heart_frame(root, air):
+    """A truncated copy of the first Heart light already in the write root, where the NAS session is."""
+    good = sorted((air / "Plan/Light/HeartNebula").glob("*.fit"))[0]
+    heart = "HeartNebula-IC1805/2026-09-23-HeartNebula-2600MC-Z61"
+    bad = root / heart / "lights" / good.name
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(good.read_bytes()[:3000])
+    return good, bad
+
+
+def test_replacing_a_damaged_copy_counts_the_retired_file(tmp_path):
+    cfg, air, root = make(tmp_path)
+    good, bad = _damaged_heart_frame(root, air)
+    p = stage_and_score(cfg)
+    res = batch.run(cfg, batch.approve(cfg, p, batch.preview(p)), lambda *a, **k: None)
+    assert [r["status"] for r in res["retired"]] == ["done"] and not res["count_problems"], res
+    assert bad.read_bytes() == good.read_bytes() and (bad.parent / "_to_delete" / good.name).stat().st_size == 3000
+    assert db.batches(cfg)[0]["status"] == "done"
+
+
+def test_a_good_copy_is_never_retired(tmp_path):
+    # the damaged file was already replaced (by hand, or an earlier run): nothing is moved, the copy is "already there"
+    cfg, air, root = make(tmp_path)
+    good, bad = _damaged_heart_frame(root, air)
+    p = stage_and_score(cfg)
+    bid = batch.approve(cfg, p, batch.preview(p))
+    bad.write_bytes(good.read_bytes())
+    res = batch.run(cfg, bid, lambda *a, **k: None)
+    assert [r["status"] for r in res["retired"]] == ["skipped"] and not res["count_problems"], res
+    assert not (bad.parent / "_to_delete").exists() and db.batches(cfg)[0]["status"] == "done"

@@ -256,15 +256,10 @@ def create_app(cfg: Config) -> FastAPI:
 
         def work(progress) -> dict:
             result = staging.run_staging(cfg, src.source, src.slug, todo, measure_rate=not src.local,
-                                         progress=lambda pct, msg, **st: progress(pct * 0.9, msg, **st))
+                                         progress=progress)
             src.reload()
-            q = replan()
-            targets = analysis.targets_by_group(cfg, q.source, q.scan, q.index, q.plan)
-            staged_n = result.get("staged", 0) + result.get("already_staged", 0)
-            result["quality"] = analysis.run_scoring(cfg, targets, lambda pct, msg, **st: progress(
-                90 + pct * 0.1, msg, phase="scoring", staged=staged_n, **st))
             replan()
-            return result
+            return result   # scoring happens on Review (Chris, 2026-09-27: Stage only gets data into staging)
 
         job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="stage")
         return {"job_id": job.id, "files": len(todo), "bytes": sum(e.size for e in todo)}
@@ -423,10 +418,13 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/quality/run")
     def run_quality():
-        if jobs.running("quality"):
-            raise HTTPException(409, "frame scoring is already running")
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
         p = planned()
         targets = analysis.targets_by_group(cfg, p.source, p.scan, p.index, p.plan)
+        todo = len(analysis.scoring_todo(cfg, targets))
+        if not todo:
+            return {"job_id": None, "to_score": 0}
 
         def work(progress) -> dict:
             result = analysis.run_scoring(cfg, targets, progress)
@@ -434,7 +432,7 @@ def create_app(cfg: Config) -> FastAPI:
             return result
 
         job = jobs.create_python_job(work, Path(cfg.state_dir) / "logs" / "jobs", kind="quality")
-        return {"job_id": job.id}
+        return {"job_id": job.id, "to_score": todo}
 
     # ---------------- jobs (same shape as astro-stacker)
 

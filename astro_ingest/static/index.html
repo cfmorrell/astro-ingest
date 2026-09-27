@@ -72,7 +72,7 @@
         <button id="stage-run-btn" class="primary">Stage</button>
       </div>
       <div id="stage-result"></div>
-      <p class="hint">Stage reads each selected frame from the ASIAIR once over Wi-Fi, checksums it on the way in, and saves it to the staging share. Light frames are then scored for Review, and Copy &amp; verify copies from staging at disk speed. Nothing is deleted from the ASIAIR until Clean up. If the connection drops, press Stage again to pick up where it stopped.</p>
+      <p class="hint">Stage reads each selected frame from the ASIAIR once over Wi-Fi, checksums it on the way in, and saves it to the staging share. Light frames are scored when you open Review, and Copy &amp; verify copies from staging at disk speed. Nothing is deleted from the ASIAIR until Clean up. If the connection drops, press Stage again to pick up where it stopped.</p>
     </div>
   </section>
 
@@ -82,6 +82,11 @@
       <div class="card-header">
         <div class="card-title">What will be copied where</div>
         <div id="review-status-badge" class="badge">loading</div>
+      </div>
+      <div id="quality-progress" class="progress-wrap" style="display:none; margin:0 0 14px;">
+        <div class="hint" id="quality-progress-label" style="margin:0 0 6px; color:var(--text);"></div>
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
       </div>
       <div id="review-summary"></div>
       <div class="field-row" style="align-items:flex-end; margin-top:12px;">
@@ -114,10 +119,7 @@
           <button id="quality-run-btn" class="small">Score light frames</button>
         </div>
       </div>
-      <div id="quality-progress" class="progress-wrap" style="display:none; margin-top:0; margin-bottom:12px;">
-        <div class="progress-bar"><div class="progress-fill"></div></div>
-        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
-      </div>
+
       <div id="sessions-list"></div>
     </div>
 

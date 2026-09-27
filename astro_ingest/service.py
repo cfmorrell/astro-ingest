@@ -54,10 +54,12 @@ def _smb(host: str, share: str) -> Source:
 
 
 def nas_index(cfg: Config) -> NasIndex:
-    """Index of the live share, merged with the write target when they differ (dev sandbox)."""
+    """Index of the live share, merged with the write target when they differ (dev sandbox; the write target wins)."""
     index = build_index(cfg.astro_nas)
     if Path(cfg.astro_root).resolve() != Path(cfg.astro_nas).resolve() and Path(cfg.astro_root).is_dir():
-        index = merge(index, build_index(cfg.astro_root))
+        # the write target first: where both have the same path, its file is the current one (a damaged live copy
+        # already replaced in the sandbox must not look damaged again)
+        index = merge(build_index(cfg.astro_root), index)
     return index
 
 

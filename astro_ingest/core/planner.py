@@ -46,6 +46,8 @@ CLEANUP = {COPY: "after-verify", APPEND: "after-verify", ALREADY: "after-verify"
            NO_LIGHTS: "blocked", OVER_CAP: "callout", NOT_KEPT: "callout", UNRECOGNIZED: "callout",
            ORPHAN_THUMB: "callout", IGNORED: "never", REJECTED: "callout", EXCLUDED: "callout"}
 
+RELEASE_ANSWER = "release"
+NO_RELEASE_OPTION = {"release", "tiny-group", "borrow-flats"}   # already offer it, or aren't about frames' fate
 TINY_GROUP = 3                          # light groups this small are asked about (Chris, 2026-09-25)
 BATCH_GAP = dt.timedelta(hours=1)       # a new calibration batch starts after a gap longer than this
 ANGLE_TOLERANCE = 3                     # degrees, compared mod 180 (a meridian flip reports +180)
@@ -255,12 +257,27 @@ class _Planner:
     def decide(self, kind: str, key: object, question: str, options: list[tuple[str, str]], default: str | None,
                items: list[str], group: str | None = None, title: str | None = None) -> Decision:
         did = f"{kind}-{_stable_id(kind, key)}"
+        if kind not in NO_RELEASE_OPTION and items:
+            # every decision about frames can send them to Clean up instead (Chris, 2026-09-27: garbage frames
+            # shouldn't have to be kept on the ASIAIR or appended); see apply_releases
+            options = list(options) + [(RELEASE_ANSWER, "Release for deletion")]
         d = Decision(did, kind, question, [{"value": v, "label": lbl} for v, lbl in options], default, list(items),
                      group, self.answers.get(did), title or TITLES.get(kind, kind))
         self.decisions[did] = d
         for rel in items:
             self.items[rel].decision = did
         return d
+
+    def apply_releases(self) -> None:
+        """Frames whose decision was answered "Release for deletion" go nowhere; Clean up offers them, called out."""
+        for d in self.decisions.values():
+            if d.kind in NO_RELEASE_OPTION or d.resolved != RELEASE_ANSWER:
+                continue
+            for rel in d.items:
+                it = self.items.get(rel)
+                if it is not None and it.action != ALREADY:
+                    it.action, it.dsts, it.retire = NOT_KEPT, [], []
+                    it.reason = "released for deletion on Review"
 
     def session(self, target_folder: str, folder: str, new_target: bool = False) -> PlannedSession:
         rel = f"{target_folder}/{folder}"
@@ -349,6 +366,7 @@ class _Planner:
         self.plan_library(bias, "bias")
         self.link_siblings()
         self.borrow_flats()
+        self.apply_releases()
 
         items = sorted(self.items.values(), key=lambda i: i.src)
         sessions = sorted(self.sessions.values(), key=lambda s: s.rel)

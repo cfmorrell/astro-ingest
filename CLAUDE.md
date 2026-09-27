@@ -122,6 +122,12 @@ so tell Chris.
     Mac metadata (`._x`, `.DS_Store`) goes with its partner, and a "not supported" reply is checked against the listing
     (the ASIAIR removes them but reports an error).
 
+28. **Round 4 (2026-09-27).** Stage only stages; **scoring runs on Review**, started when Review opens, with a
+    bar at the top (Next waits for it). **Every decision about frames offers "Release for deletion"** (planner
+    `apply_releases`). Copy & verify never retires a NAS file identical to its replacement; the count check allows for
+    retired files; in dev the sandbox's copy of a path wins over the live share's. Catalog also follows a batch that
+    finished with problems (it catalogues what was copied).
+
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
 "the Astronomy share", in docs, UI, status names and code (`NasIndex`, `ASTRO_NAS`).

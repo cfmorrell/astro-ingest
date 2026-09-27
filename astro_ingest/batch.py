@@ -143,7 +143,14 @@ def run(cfg: Config, batch_id: str, progress: Callable[..., None]) -> dict:
                 continue
             t0 = time.time()
             if o["kind"] == "retire":
-                status, detail = fsops.retire(cfg, o["dst"])
+                repl = next((c for c in copies if c["src"] == o["src"]), None)
+                there = root / o["dst"]
+                if repl and there.is_file() and there.stat().st_size == repl["size"] and \
+                        fsops.hash_file(there) == repl["blake2b"]:
+                    # already the good copy (e.g. replaced before): nothing damaged to retire, never move a good copy
+                    status, detail = "skipped", "already identical to the replacement: not retired"
+                else:
+                    status, detail = fsops.retire(cfg, o["dst"])
             else:
                 report(n_copy, f"copying {o['dst']} ({n_copy + 1}/{len(copies)})")
                 status, detail = fsops.copy_verified(cfg, Path(o["staged"]), o["dst"], o["size"], o["blake2b"], on_bytes)
@@ -163,8 +170,9 @@ def run(cfg: Config, batch_id: str, progress: Callable[..., None]) -> dict:
     ops = db.operations(cfg, batch_id)
     after = {f: fsops.count_files(root / f) for f in folders}
     added = Counter(str(Path(o["dst"]).parent) for o in ops if o["kind"] == "copy" and o["status"] == "done")
-    count_problems = [f"{f}: {before[f]} files before, {after[f]} after, {added[f]} copied"
-                      for f in folders if after[f] != before[f] + added[f]]
+    retired = Counter(str(Path(o["dst"]).parent) for o in ops if o["kind"] == "retire" and o["status"] == "done")
+    count_problems = [f"{f}: {before[f]} files before, {after[f]} after, {added[f]} copied, {retired[f]} retired"
+                      for f in folders if after[f] != before[f] + added[f] - retired[f]]
     by_status = Counter(o["status"] for o in ops if o["kind"] == "copy")
     result = {
         "batch": batch_id, "copied": by_status["done"], "already_there": by_status["already-there"],

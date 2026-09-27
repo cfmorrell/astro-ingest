@@ -446,3 +446,24 @@ def test_borrowing_flats_from_a_nas_session(w):
     b = w.plan({d.id: d.options[1]["value"]}).borrowed
     assert b[0]["from"] == donor and {f["from"] for f in b[0]["files"]} == {"nas"}
     assert all(f["dst"].startswith(f"{SOUL_20}/flats/") for f in b[0]["files"])
+
+
+def test_every_frame_decision_can_release_for_deletion(w):
+    # Chris, 2026-09-27: garbage frames shouldn't have to be kept on the ASIAIR or appended
+    sadr = "SadrRegion-IC1318/2025-10-16-SadrRegion-2600MC-FMA135"
+    asiair_frame(w.nas, f"{sadr}/lights", "Light", "20251016-204000", obj="NGC 6888", FOCALLEN=137)
+    w.light("20251016-204000", obj="NGC 6888", folder="Autorun/Light/NGC 6888", FOCALLEN=137)
+    w.light("20251016-214500", obj="NGC 6888", folder="Autorun/Light/NGC 6888", FOCALLEN=137, seq=2)
+    good = w.light("20251016-220000", obj="NGC 6888", folder="Autorun/Light/NGC 6888", FOCALLEN=137, seq=3)
+    bad = w.nas / sadr / "lights" / good.name
+    bad.write_bytes(good.read_bytes()[:3000])                      # a damaged NAS copy
+    plan = w.plan()
+    for kind in ("append", "name-clash"):
+        assert "release" in [o["value"] for o in decision(plan, kind).options], kind
+    d = decision(plan, "append")
+    released = w.plan({d.id: "release"})
+    it = next(i for i in released.items if i.src == d.items[0])
+    assert (it.action, it.dsts, it.cleanup) == (P.NOT_KEPT, [], "callout") and "released for deletion" in it.reason
+    c = decision(plan, "name-clash")
+    it = next(i for i in w.plan({c.id: "release"}).items if i.src == c.items[0])
+    assert it.action == P.NOT_KEPT and it.retire == [] and it.dsts == []   # nothing retired, nothing copied

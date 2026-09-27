@@ -545,7 +545,7 @@ function qualityToolbar(group, items) {
 
 function catalogAvailable() {
   // Catalog follows a copy: reachable once a copy batch is waiting to be catalogued, or was catalogued in this view
-  return state.passed.has("catalog") || state.batches.some((b) => b.status === "done" && !b.catalogued_at);
+  return state.passed.has("catalog") || state.batches.some((b) => (b.status === "done" || b.status === "failed") && !b.catalogued_at);
 }
 
 function stepStatus(step) {
@@ -576,7 +576,7 @@ function stepDone(step) {
     case "connect": return !!(state.health && state.health.source_online);
     case "scan": return !!p && selectedItems().length > 0;
     case "stage": return !!p && selectedItems().length > 0 && selectedItems().every((i) => i.staged);
-    case "review": return !!p && p.summary.decisions_open === 0;
+    case "review": return !!p && p.summary.decisions_open === 0 && !state.qualityRunning && !needsScoring();
     case "copy": return state.passed.has("copy") || (!!state.copyPreview && !state.copyPreview.copies && catalogAvailable());
     case "catalog": return !!state.catalogPreview && !state.catalogPreview.summary.writes && !state.catalogPreview.summary.batches.length;
     default: return false;
@@ -626,6 +626,7 @@ function renderStepBar() {
   } else if (step === "review" && p) {
     const s = p.summary;
     parts.push([b(`${s.copy_files} file${s.copy_files === 1 ? "" : "s"}`), ` to copy · ${gb(s.copy_bytes)}`, s.decisions_open ? ` · ${s.decisions_open} decision${s.decisions_open === 1 ? "" : "s"} open` : ""]);
+    if (state.qualityRunning) blocked = "Scoring light frames…";
   } else if (step === "copy" && state.copyPreview) {
     const pv = state.copyPreview;
     parts.push(pv.copies ? [b(`${pv.copies} file${pv.copies === 1 ? "" : "s"}`), ` ready to copy · ${gb(pv.bytes)}`] : [b("Nothing left to copy")]);
@@ -652,6 +653,7 @@ function renderStepBar() {
   if (step !== "clean") {
     next.disabled = !!blocked;
     why.textContent = blocked && (!/…$/.test(blocked) || /^Scoring/.test(blocked)) ? blocked : "";
+    if (step === "review" && state.qualityRunning) why.textContent = "Scoring light frames… (see the top of Review)";
     next.classList.toggle("ready", !blocked && stepDone(step));
   }
 }
@@ -691,6 +693,7 @@ function showActiveStep() {
   });
   renderStepper();
   if (state.activeStep === "catalog" && !state.catalogRunning) loadCatalog();
+  if (state.activeStep === "review" && !state.qualityRunning && !state.stageRunning && needsScoring()) runQuality();
   if (state.activeStep === "clean" && !state.cleanRunning) loadCleanStep();
 }
 
@@ -1898,20 +1901,43 @@ async function pollJobInner(jobId, progressEl, onDone, onTick) {
 }
 
 async function watchQualityJob(jobId) {
+  // Scoring runs on Review (Chris, 2026-09-27), with its own bar at the top; Next waits for it
   const btn = document.getElementById("quality-run-btn");
+  const bar = document.getElementById("quality-progress");
+  const label = document.getElementById("quality-progress-label");
   btn.disabled = true;
-  await pollJob(jobId, document.getElementById("quality-progress"), async (snap) => {
+  state.qualityRunning = true;
+  label.textContent = "Scoring light frames for Review…";
+  renderStepBar();
+  await pollJob(jobId, bar, async (snap) => {
     btn.disabled = false;
+    state.qualityRunning = false;
+    bar.style.display = "none";
     await loadPlan(false);
     document.getElementById("quality-status").textContent = snap.status === "succeeded"
-      ? `Scored ${snap.result.scored} frame(s) in ${snap.result.seconds}s (${snap.result.skipped_cached} already scored${snap.result.failed ? `, ${snap.result.failed} failed` : ""}).`
+      ? `Scored ${snap.result.scored} frame(s) in ${clock(snap.result.seconds)}${snap.result.failed ? `, ${snap.result.failed} failed` : ""}.`
       : `Scoring failed: ${snap.error}`;
+    renderStepBar();
+  }, (snap) => {
+    const st = snap.stats || {};
+    label.textContent = st.to_score
+      ? `Scoring light frames for Review: ${st.scored} / ${st.to_score} (frames already on the NAS in these sessions are scored alongside, to compare against)`
+      : "Scoring light frames for Review…";
+    renderStepBar();
   });
+}
+
+function needsScoring() {
+  // staged light frames this run still has no score for
+  const p = state.plan;
+  return !!p && p.items.some((i) => i.kind === "Light" && !i.quality && (i.staged || i.has_staged_copy) &&
+    ["copy", "append", "rejected", "needs-decision"].includes(i.action));
 }
 
 async function runQuality() {
   try {
     const { job_id } = await api("POST", "/api/quality/run");
+    if (!job_id) { document.getElementById("quality-status").textContent = "Every staged light frame is scored."; return; }
     await watchQualityJob(job_id);
   } catch (e) {
     document.getElementById("quality-status").textContent = String(e.message || e);

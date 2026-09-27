@@ -165,10 +165,10 @@ def unfinished_batch(cfg: Config) -> str | None:
 
 
 def uncatalogued_batches(cfg: Config) -> list[dict]:
-    """Finished copy batches whose Catalog step hasn't run yet, oldest first."""
+    """Finished copy batches (also those with problems: what they did copy is catalogued) not catalogued yet."""
     with connect(cfg) as con:
         ids = [r["id"] for r in con.execute(
-            "SELECT id FROM batches WHERE status = 'done' AND catalogued_at IS NULL ORDER BY created_at")]
+            "SELECT id FROM batches WHERE status IN ('done', 'failed') AND catalogued_at IS NULL ORDER BY created_at")]
     return [batch(cfg, i) | {"operations": operations(cfg, i)} for i in ids]
 
 
