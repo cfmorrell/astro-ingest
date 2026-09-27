@@ -5,7 +5,7 @@
  */
 
 const STEPS = ["connect", "scan", "stage", "review", "copy", "catalog", "clean"];
-const STEP_LABELS = { connect: "Connect", scan: "Scan", stage: "Stage", review: "Review", copy: "Copy & verify", catalog: "Catalog", clean: "Clean up" };
+const STEP_LABELS = { connect: "Connect", scan: "Scan Images", stage: "Stage", review: "Review", copy: "Copy & verify", catalog: "Catalog", clean: "Clean up" };
 const STEP_PHASE = {};  // steps not built yet: shown, disabled, tagged with their phase
 const LARGE_GROUP_THRESHOLD = 20;  // beyond this, collapse to flagged frames +/- 2 neighbours (as astro-stacker)
 const SMALL_GROUP_PEERS = 10;      // fewer frames than this to compare against: scoring is less reliable (M42 04-11)
@@ -22,15 +22,15 @@ const ACTION_LABELS = {
   "over-cap": "over 10-frame cap",
   "not-kept": "not kept",
   "rejected": "rejected (quality)",
-  "excluded": "left out by you",
+  "excluded": "left out on Select",
   "unrecognized": "unrecognized",
   "orphan-thumb": "orphan thumbnail",
   "ignored": "ignored folder",
 };
 const CLEANUP_LABELS = {
-  "after-verify": "Deleted from the ASIAIR after checksum-verified copies and your approval",
+  "after-verify": "Deleted from the ASIAIR once a checksum proves the NAS copy, when ticked on Clean up",
   "callout": "Offered for deletion, each one called out",
-  "blocked": "Blocked until you decide",
+  "blocked": "Kept until they're filed or released for deletion",
   "pending": "Waiting on a decision",
   "never": "Never touched",
 };
@@ -39,7 +39,9 @@ const state = {
   activeStep: "connect",  // the flow starts at the beginning and works left to right across the stepper
   health: null,
   devices: null,         // /api/devices: source mode, remembered device, last search
-  collapsedDecisions: new Set(),  // decision ids Chris collapsed (this page view)
+  collapsedDecisions: new Set(),  // decision ids collapsed (this page view)
+  passed: new Set(),     // steps finished in this page view: only these get a green check (Chris, 2026-09-27)
+  sigmaLive: null,       // σ while the slider is being dragged (flags previewed locally until it's released)
   copyPreview: null,     // /api/copy/preview: what approving now would copy
   lastBatch: null,       // the most recent copy batch
   catalogPreview: null,  // /api/catalog/preview: what the Catalog step would write
@@ -49,6 +51,8 @@ const state = {
   cleanTicked: new Set(),    // callout files Chris ticked
   cleanRunning: false,
   plan: null,
+  batches: [],           // recent copy batches (newest first)
+  lastStage: null,       // the last stage job's result in this page view
   itemsBySrc: {},
   expandedGroups: {},    // strip id -> Set of "start-end" collapsed ranges the user expanded
   chartsOpen: new Set(), // light group ids whose quality charts are shown
@@ -125,7 +129,11 @@ function toggleList(label, rows) {
   // A "show N files" link that expands a monospace list (collapsed by default: lists get long)
   const list = el("div", { class: "file-list", style: "display:none;" }, rows);
   const link = el("span", { class: "toggle-adv" }, [label]);
-  link.addEventListener("click", () => { list.style.display = list.style.display === "none" ? "block" : "none"; });
+  link.addEventListener("click", () => {
+    const open = list.style.display === "none";
+    list.style.display = open ? "block" : "none";
+    link.textContent = open ? label.replace(/^show\b/, "hide") : label;
+  });
   return el("div", {}, [link, list]);
 }
 
@@ -152,13 +160,25 @@ function isFrame(item) {
 }
 
 function previewUrl(item, size) {
-  return `/api/preview?rel=${encodeURIComponent(item.src)}&size=${size}`;
+  // Rendered from the FITS only when it's cheap: staged, or already on the NAS. Otherwise (left out on Select, not
+  // staged yet) the device's own small thumbnail; a whole frame is never read over Wi-Fi just to show it.
+  if (item.staged || state.plan.source.startsWith("local:")) return `/api/preview?rel=${encodeURIComponent(item.src)}&size=${size}`;
+  if (item.ingested_at && item.ingested_at.length && !(item.retire && item.retire.length)) return `/api/preview?nas=${encodeURIComponent(item.ingested_at[0])}&size=${size}`;
+  return item.thumb ? `/api/thumb?rel=${encodeURIComponent(item.thumb)}` : null;
 }
 
 // ---------- frame quality (flags come from the server at the chosen sensitivity) ----------
 
 function isFlagged(item) {
-  return !!(item.quality && item.quality.flagged);
+  const q = item.quality;
+  if (!q) return false;
+  if (state.sigmaLive === null) return !!q.flagged;
+  // while the σ slider moves: the server's rule (quality.flag_anomalies), applied locally
+  return q.stats.star_count === 0 || Object.values(q.anomaly_z || {}).some((z) => z >= state.sigmaLive);
+}
+
+function currentSigma() {
+  return state.sigmaLive !== null ? state.sigmaLive : (state.plan ? state.plan.sigma : 4);
 }
 
 function isKept(item) {
@@ -171,7 +191,7 @@ function frameStatsLine(item) {
   if (!q) return "Not scored yet";
   const s = q.stats;
   const z = q.anomaly_z || {};
-  const sigma = state.plan ? state.plan.sigma : 4;
+  const sigma = currentSigma();
   const part = (label, key, value) => `${label}: ${value}${(z[key] || 0) >= sigma ? ` ⚠ ${z[key].toFixed(1)}σ` : ""}`;
   return [
     part("Stars", "star_count", s.star_count),
@@ -179,6 +199,7 @@ function frameStatsLine(item) {
     part("Eccentricity", "roundness", s.roundness !== null ? s.roundness.toFixed(3) : "—"),
     part("SNR", "snr", s.snr !== null ? s.snr.toFixed(0) : "—"),
     part("Background", "background", Math.round(s.background)),
+    part("Noise", "background_std", s.background_std !== null && s.background_std !== undefined ? s.background_std.toFixed(1) : "—"),
   ].join(", ") + `  ·  vs ${q.peers - 1} other frames`;
 }
 
@@ -223,7 +244,7 @@ function renderLightboxFrame() {
   const q = item.quality;
   const { date, time } = formatCaptured(q && q.stats.captured_at);
   const isLight = item.kind === "Light";
-  openLightbox(previewUrl(item, FULL), `${basename(item.src)}${q ? ` — ${date} ${time}` : ""}`, {
+  openLightbox(previewUrl(item, FULL) || "", `${basename(item.src)}${q ? ` — ${date} ${time}` : ""}`, {
     stats: isLight ? `${frameStatsLine(item)}${item.reason ? `  ·  ${item.reason}` : ""}` : `${actionLabel(item)}${item.reason ? ` · ${item.reason}` : ""}`,
     indicator: isLight && q ? (isFlagged(item) ? "flagged" : "ok") : null,
   });
@@ -294,8 +315,12 @@ function frameCard(item, items, index) {
   const scored = item.kind === "Light" && item.quality;
   const cls = !scored ? "unscored" : isKept(item) ? "kept" : isFlagged(item) ? "flagged" : "";
   const card = el("div", { class: `frame-card ${cls}` }, []);
-  if (isFrame(item)) {
-    card.appendChild(el("img", { src: previewUrl(item, THUMB), alt: basename(item.src), onclick: () => openLightboxFor(items.filter(isFrame), items.filter(isFrame).indexOf(item)) }, []));
+  const url = isFrame(item) ? previewUrl(item, THUMB) : null;
+  if (url) {
+    const img = el("img", { src: url, alt: basename(item.src), onclick: () => openLightboxFor(items.filter(isFrame), items.filter(isFrame).indexOf(item)) }, []);
+    // a preview that can't be rendered (e.g. a truncated NAS copy) falls back to the device's own thumbnail
+    img.addEventListener("error", () => { if (item.thumb && !img.src.includes("/api/thumb")) img.src = `/api/thumb?rel=${encodeURIComponent(item.thumb)}`; });
+    card.appendChild(img);
   }
   const meta = el("div", { class: "frame-meta" }, [
     el("div", { class: "frame-time", title: item.src }, [isFrame(item) ? frameLabel(item.src) : basename(item.src)]),
@@ -368,7 +393,7 @@ function metricStrip(label, items, key) {
   const lo = Math.min(...values);
   const hi = Math.max(...values);
   const span = hi - lo || 1;
-  const sigma = state.plan.sigma;
+  const sigma = currentSigma();
   const bars = el("div", { class: "metric-bars" }, scored.map((it, n) => {
     const h = Math.max(3, ((values[n] - lo) / span) * 68 + 4);
     const flagged = (it.quality.anomaly_z[key] || 0) >= sigma;
@@ -407,6 +432,8 @@ function qualityToolbar(group, items) {
       metricStrip("FWHM", items, "fwhm"),
       metricStrip("eccentricity", items, "roundness"),
       metricStrip("SNR", items, "snr"),
+      metricStrip("sky background", items, "background"),
+      metricStrip("background noise", items, "background_std"),
     ]));
   }
   return wrap;
@@ -414,25 +441,36 @@ function qualityToolbar(group, items) {
 
 // ---------- stepper ----------
 
+function catalogAvailable() {
+  // Catalog follows a copy: reachable once a copy batch is waiting to be catalogued, or was catalogued in this view
+  return state.passed.has("catalog") || state.batches.some((b) => b.status === "done" && !b.catalogued_at);
+}
+
 function stepStatus(step) {
+  // A step gets a green check only once it has been finished in this page view (Next pressed, or its job done),
+  // and what it did still holds: a reload starts with no checks except a connected device.
   if (STEP_PHASE[step]) return { available: false, complete: false };
   const planned = !!state.plan;
+  const passed = state.passed.has(step);
   switch (step) {
     case "connect": return { available: true, complete: !!(state.health && state.health.source_online) };
-    case "scan": return { available: true, complete: planned };
-    case "stage": return { available: planned, complete: planned && selectedItems().length > 0 && selectedItems().every((i) => i.staged) };
-    case "review": return { available: planned, complete: planned && state.plan.summary.decisions_open === 0 };
-    case "copy": return { available: planned, complete: !!(state.copyPreview && state.copyPreview.copies === 0 && state.lastBatch && state.lastBatch.status === "done") };
-    case "clean": {
-      const c = state.cleanPreview;
-      return { available: planned, complete: !!(c && c.last && c.last.status === "done" && !cleanSelected().length) };
-    }
+    case "scan": return { available: true, complete: passed && planned };
+    case "stage": return { available: planned, complete: passed && planned && selectedItems().every((i) => i.staged) };
+    case "review": return { available: planned, complete: passed && planned && state.plan.summary.decisions_open === 0 };
+    case "copy": return { available: planned, complete: passed && !!(state.copyPreview && state.copyPreview.copies === 0) };
     case "catalog": {
       const c = state.catalogPreview;
-      return { available: true, complete: !!(c && !c.summary.batches.length && !c.summary.writes && state.lastBatch) };
+      return { available: catalogAvailable(), complete: passed && !!(c && !c.summary.batches.length && !c.summary.writes) };
     }
+    case "clean": return { available: planned, complete: passed && !cleanSelected().length };
     default: return { available: false, complete: false };
   }
+}
+
+function goTo(step, from) {
+  if (from) state.passed.add(from);
+  state.activeStep = step;
+  showActiveStep();
 }
 
 function renderStepper() {
@@ -503,7 +541,7 @@ function renderFindResult(res) {
     const nameInput = el("input", { type: "text", placeholder: "your name for it, e.g. ASIAIR Color", value: d.remembered && res.remembered ? (res.remembered.nickname || "") : "" }, []);
     box.appendChild(el("div", { class: "night-block" }, [
       el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap;" }, [
-        el("span", { class: `badge ${d.remembered ? "ok" : "accent"}` }, [d.remembered ? "yours" : d.label]),
+        el("span", { class: `badge ${d.remembered ? "ok" : "accent"}` }, [d.remembered ? "currently selected" : d.label]),
         el("span", { class: "session-path" }, [d.host]),
         el("span", { class: "hint", style: "margin:0;" }, [d.name ? `network name ${d.name}` : ""]),
       ]),
@@ -546,7 +584,9 @@ function renderScan() {
   const body = document.getElementById("scan-body");
   body.innerHTML = "";
   if (!p) return;
-  setStepBadge("scan-status-badge", "ok", `scanned ${p.scanned_at.replace("T", " ")}`);
+  document.getElementById("scan-status-badge").style.display = "none";
+  const when = new Date(p.scanned_at);
+  document.getElementById("scanned-at").textContent = isNaN(when.getTime()) ? "" : `Scanned ${when.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
   const byTop = {};
   p.items.forEach((i) => {
     const top = i.src.includes("/") ? i.src.slice(0, i.src.indexOf("/")) : "(share root)";
@@ -628,7 +668,6 @@ function renderSelect() {
   const toRead = selected.filter((i) => !i.staged);
   const bytes = toRead.reduce((a, i) => a + i.size, 0);
   const excluded = p.items.filter((i) => i.action === "excluded");
-  setStepBadge("select-status-badge", selected.length ? "accent" : "", `${selected.length} selected`);
   const summary = document.getElementById("select-summary");
   summary.innerHTML = "";
   summary.appendChild(el("div", { class: "stat-row" }, [
@@ -694,20 +733,21 @@ function renderStage(live) {
   let remaining, frames, data, speed;
   if (live && live.files_total !== undefined) {
     remaining = [live.eta_s !== null ? clock(live.eta_s) : "estimating…", "time remaining", "ok"];
-    frames = [`${live.files_done} / ${live.files_total}`, "frames read"];
-    data = [`${gb(live.bytes_done)} / ${gb(live.bytes_total)}`, "data read"];
+    frames = [`${live.files_done} / ${live.files_total}`, "frames staged"];
+    data = [`${gb(live.bytes_done)} / ${gb(live.bytes_total)}`, "data staged"];
     speed = [live.mb_s ? `${live.mb_s} MB/s` : "…", "speed"];
   } else if (!selected.length) {
     remaining = ["—", "nothing selected: choose frames on the Scan step"];
     frames = ["0", "frames"]; data = ["0 B", "data"]; speed = ["—", "speed"];
   } else if (!toRead.length) {
-    remaining = ["done", "everything selected is staged", "ok"];
+    const took = state.lastStage ? state.lastStage.seconds : (p.rate_seconds || null);
+    remaining = ["done", took ? `everything staged in ${clock(took)}` : "everything staged", "ok"];
     frames = [`${selected.length} / ${selected.length}`, "frames staged"];
-    data = [gb(allBytes), "staged"]; speed = [p.rate_kind === "measured" ? `${p.rate_mb_s} MB/s` : "—", "last measured speed"];
+    data = [gb(allBytes), "data staged"]; speed = [p.rate_kind === "measured" ? `${p.rate_mb_s} MB/s` : "—", "last measured speed"];
   } else {
     remaining = [roughTime(bytes).replace("about ", "~"), `estimated at ~${p.rate_mb_s} MB/s (${p.rate_kind === "measured" ? "measured" : "typical Wi-Fi"})`, "ok"];
     frames = [`${selected.length - toRead.length} / ${selected.length}`, "frames staged"];
-    data = [`${gb(bytes)}`, "to read"]; speed = [p.rate_kind === "measured" ? `${p.rate_mb_s} MB/s` : "—", "last measured speed"];
+    data = [`${gb(bytes)}`, "to stage"]; speed = [p.rate_kind === "measured" ? `${p.rate_mb_s} MB/s` : "—", "last measured speed"];
   }
   box.appendChild(el("div", { class: "stat-row" }, [remaining, frames, data, speed].map(([n, l, k]) => stat(n, l, k))));
 
@@ -735,8 +775,8 @@ async function watchStageJob(jobId) {
     const res = document.getElementById("stage-result");
     res.innerHTML = "";
     if (snap.status === "succeeded") {
-      const r = snap.result;
-      res.appendChild(el("div", { class: "hint" }, [`Staged ${r.staged} frame(s) (${gb(r.bytes)} in ${clock(r.seconds)}${r.mb_s ? `, ${r.mb_s} MB/s` : ""}); ${r.already_staged} were already staged. Scored ${r.quality.scored} frame(s).`]));
+      state.lastStage = snap.result;   // the done box says how long it took
+      state.passed.add("stage");
     } else {
       res.appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "staging failed"]));
     }
@@ -786,6 +826,9 @@ function renderCopy(live) {
   const btn = document.getElementById("copy-run-btn");
   btn.textContent = live ? "Copying…" : pv.unfinished_batch ? "Resume copy" : pv.copies ? `Approve & copy ${pv.copies} file${pv.copies === 1 ? "" : "s"}` : "Nothing to copy";
   if (!state.copyRunning) btn.disabled = !pv.copies && !pv.unfinished_batch;
+  const next = document.getElementById("copy-next-btn");
+  next.disabled = !catalogAvailable();
+  next.title = next.disabled ? "Copy something first: Catalog works on what was copied" : "";
   setStepBadge("copy-status-badge", live ? "accent" : pv.copies ? "" : "ok", live ? "copying…" : pv.unfinished_batch ? "interrupted" : pv.copies ? "awaiting approval" : "up to date");
 
   const dests = document.getElementById("copy-dests");
@@ -808,12 +851,18 @@ function renderCopy(live) {
   ])));
 }
 
+function logLink(path) {
+  // STATE_DIR/logs/<name> is served at /api/logs/<name>; job logs live one folder down
+  const name = basename(path);
+  return el("a", { href: `/api/logs/${path.includes("/logs/jobs/") ? "jobs/" : ""}${encodeURIComponent(name)}`, target: "_blank", rel: "noopener" }, [name]);
+}
+
 function renderCopyResult(res) {
   const box = document.getElementById("copy-result");
   box.innerHTML = "";
   if (!res) return;
   box.appendChild(el("div", { class: "hint" }, [
-    `Batch ${res.batch}: ${res.copied} copied and verified, ${res.already_there} already there, ${res.clashes.length} clash${res.clashes.length === 1 ? "" : "es"}, ${res.failed.length} failed, in ${clock(res.seconds)}; ${gb(res.staging_cleared_bytes)} cleared from staging. Log: ${res.log}`,
+    `Batch ${res.batch}: ${res.copied} copied and verified, ${res.already_there} already there, ${res.clashes.length} clash${res.clashes.length === 1 ? "" : "es"}, ${res.failed.length} failed, in ${clock(res.seconds)}; ${gb(res.staging_cleared_bytes)} cleared from staging. Log: `, logLink(res.log),
   ]));
   res.count_problems.forEach((c) => box.appendChild(el("div", { class: "error-banner" }, [`✕ file count mismatch: ${c}`])));
   const list = (label, rows, cls) => rows.length && box.appendChild(el("div", { class: cls }, [`${label}:`, ...rows.map((r) => el("div", { class: "session-path" }, [`${r.dst} — ${r.detail}`]))]));
@@ -828,7 +877,7 @@ async function watchCopyJob(jobId) {
   btn.disabled = true;
   await pollJob(jobId, document.getElementById("copy-progress"), async (snap) => {
     state.copyRunning = false;
-    if (snap.status === "succeeded") renderCopyResult(snap.result);
+    if (snap.status === "succeeded") { renderCopyResult(snap.result); state.passed.add("copy"); }
     else {
       document.getElementById("copy-result").innerHTML = "";
       document.getElementById("copy-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "copy failed"]));
@@ -840,7 +889,7 @@ async function watchCopyJob(jobId) {
 async function runCopy() {
   const pv = state.copyPreview;
   const what = pv.unfinished_batch ? `Resume the interrupted batch ${pv.unfinished_batch}?`
-    : `Copy ${pv.copies} file${pv.copies === 1 ? "" : "s"} (${gb(pv.bytes)}) onto the NAS into ${pv.destinations.length} folder${pv.destinations.length === 1 ? "" : "s"}${pv.retires ? `, retiring ${pv.retires} damaged cop${pv.retires === 1 ? "y" : "ies"} to _to_delete/ first` : ""}? Nothing is overwritten and nothing on the device is touched.`;
+    : `Copy ${pv.copies} file${pv.copies === 1 ? "" : "s"} (${gb(pv.bytes)}) onto the NAS into ${pv.destinations.length} folder${pv.destinations.length === 1 ? "" : "s"}${pv.retires ? `, retiring ${pv.retires} damaged cop${pv.retires === 1 ? "y" : "ies"} to _to_delete/ first` : ""}? Nothing is overwritten, and nothing is deleted from the ASIAIR.`;
   if (!confirm(what)) return;
   try {
     const { job_id } = await api("POST", "/api/copy/run");
@@ -856,7 +905,7 @@ async function runCopy() {
 const CHANGE_GROUPS = [
   ["project-info", "PROJECT_INFO.txt"], ["targets-csv", "targets.csv: new targets"],
   ["notes", "Sibling nights (.project_notes.txt)"], ["flats-note", "Borrowed flats (.flats_are_copies)"],
-  ["links", "Index links (100-…103-)"], ["index-md", "ZZ_TARGET_INDEX.md"],
+  ["links", "Index links (ByMessierNumber, ByNGCNumber, ByICNumber, ByDate)"], ["index-md", "ZZ_TARGET_INDEX.md"],
 ];
 
 function diffBlock(text) {
@@ -947,7 +996,7 @@ function renderCatalogResult(res) {
   if (!res) return;
   const parts = Object.entries(res.by_kind).map(([k, n]) => `${n} ${k}`).join(", ");
   box.appendChild(el("div", { class: "hint" }, [
-    `Wrote ${res.writes} update${res.writes === 1 ? "" : "s"}${parts ? ` (${parts})` : ""}; ${res.batches.length} batch${res.batches.length === 1 ? "" : "es"} marked catalogued${res.decision_log_drafts ? `; ${res.decision_log_drafts} decision-log draft line${res.decision_log_drafts === 1 ? "" : "s"} saved` : ""}. Log: ${res.log}`,
+    `Wrote ${res.writes} update${res.writes === 1 ? "" : "s"}${parts ? ` (${parts})` : ""}; ${res.batches.length} batch${res.batches.length === 1 ? "" : "es"} marked catalogued${res.decision_log_drafts ? `; ${res.decision_log_drafts} decision-log draft line${res.decision_log_drafts === 1 ? "" : "s"} saved` : ""}. Log: `, logLink(res.log),
   ]));
   const skipped = Object.entries(res.by_kind).filter(([k]) => / (clash|skipped)$/.test(k));
   if (skipped.length) box.appendChild(el("div", { class: "session-mismatch-warning" }, [`⚠ not written (something already there): ${skipped.map(([k, n]) => `${n} ${k}`).join(", ")}`]));
@@ -960,7 +1009,7 @@ async function watchCatalogJob(jobId) {
   btn.textContent = "Writing…";
   await pollJob(jobId, document.getElementById("catalog-progress"), async (snap) => {
     state.catalogRunning = false;
-    if (snap.status === "succeeded") renderCatalogResult(snap.result);
+    if (snap.status === "succeeded") { renderCatalogResult(snap.result); state.passed.add("catalog"); }
     else {
       document.getElementById("catalog-result").innerHTML = "";
       document.getElementById("catalog-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "catalog failed"]));
@@ -1068,7 +1117,8 @@ function renderCleanStep(live) {
           onchange: (e) => { g.items.forEach((i) => setCleanTick(g, i.rel, e.target.checked)); renderCleanStep(); },
         }, []) : null,
         el("div", { class: "card-title" }, [g.label]),
-        el("span", { class: `badge ${g.selectable ? (g.ticked ? "ok" : "warn") : ""}` }, [`${g.files} file${g.files === 1 ? "" : "s"} · ${gb(g.bytes)}`]),
+        g.recommended ? el("span", { class: "badge ok" }, ["recommended"]) : null,
+        el("span", { class: `badge ${g.selectable ? (g.recommended ? "ok" : "warn") : ""}` }, [`${g.files} file${g.files === 1 ? "" : "s"} · ${gb(g.bytes)}`]),
         g.selectable ? el("span", { class: "hint", style: "margin:0;" }, [`${inGroup.length} of ${g.items.length} ticked`]) : null,
       ]),
     ]);
@@ -1099,7 +1149,7 @@ function renderCleanResult(res) {
     return;
   }
   box.appendChild(el("div", { class: "hint" }, [
-    `Clean-up ${res.cleanup}: ${res.deleted} file${res.deleted === 1 ? "" : "s"} deleted (${gb(res.bytes_freed)} freed)${res.already_gone ? `, ${res.already_gone} already gone` : ""}, ${res.skipped.length} skipped, ${res.failed.length} failed${res.pruned.length ? `, ${res.pruned.length} empty folder${res.pruned.length === 1 ? "" : "s"} removed` : ""}. The device was listed again afterwards: ${res.unexpected_missing.length || res.still_there.length ? "see below" : "exactly the deleted files are gone"}. Log: ${res.log}`]));
+    `Clean-up ${res.cleanup}: ${res.deleted} file${res.deleted === 1 ? "" : "s"} deleted (${gb(res.bytes_freed)} freed)${res.already_gone ? `, ${res.already_gone} already gone` : ""}, ${res.skipped.length} skipped, ${res.failed.length} failed${res.pruned.length ? `, ${res.pruned.length} empty folder${res.pruned.length === 1 ? "" : "s"} removed` : ""}. The device was listed again afterwards: ${res.unexpected_missing.length || res.still_there.length ? "see below" : "exactly the deleted files are gone"}. Log: `, logLink(res.log)]));
   const rows = (label, items, cls) => items.length && box.appendChild(el("div", { class: cls }, [`${label}:`, ...items.map((r) => el("div", { class: "session-path" }, [typeof r === "string" ? r : `${r.rel} — ${r.detail}`]))]));
   rows("Failed", res.failed, "error-banner");
   rows("Missing but not deleted by this run", res.unexpected_missing, "error-banner");
@@ -1113,7 +1163,7 @@ async function watchCleanJob(jobId) {
   document.getElementById("clean-run-btn").disabled = true;
   await pollJob(jobId, document.getElementById("clean-progress"), async (snap) => {
     state.cleanRunning = false;
-    if (snap.status === "succeeded") renderCleanResult(snap.result);
+    if (snap.status === "succeeded") { renderCleanResult(snap.result); if (snap.result.cleanup) state.passed.add("clean"); }
     else {
       document.getElementById("clean-result").innerHTML = "";
       document.getElementById("clean-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "failed"]));
@@ -1161,6 +1211,13 @@ async function runCleanDelete() {
 
 // ---------- review ----------
 
+function decisionFrames(p) {
+  // every frame some decision is about (a frame can't be filed or released until its decision has an answer)
+  const srcs = new Set();
+  p.decisions.forEach((d) => d.items.forEach((src) => srcs.add(src)));
+  return [...srcs].map((src) => state.itemsBySrc[src]).filter((i) => i && isFrame(i));
+}
+
 function renderReview() {
   const p = state.plan;
   if (!p) return;
@@ -1178,10 +1235,12 @@ function renderReview() {
     stat(p.sessions.filter((x) => x.exists && (x.lights || x.flats)).length, "sessions to append to"),
     stat(s.actions["already-ingested"] || 0, "already on the NAS"),
     stat(rejected, "rejected for quality", rejected ? "warn" : ""),
+    stat(decisionFrames(p).length, `frame${decisionFrames(p).length === 1 ? "" : "s"} in decisions`),
     stat(s.decisions_open, "decisions open", s.decisions_open ? "warn" : "ok"),
   ]));
   const sigmaInput = document.getElementById("quality-sigma");
-  if (document.activeElement !== sigmaInput) sigmaInput.value = p.sigma;
+  if (state.sigmaLive === null) sigmaInput.value = p.sigma;
+  document.getElementById("quality-sigma-value").textContent = `σ ${Number(currentSigma()).toFixed(1)}`;
   document.getElementById("quality-status").textContent = scored
     ? `${scored} light frame${scored === 1 ? "" : "s"} scored · default σ ${p.sigma_default}`
     : "No frames scored yet.";
@@ -1198,6 +1257,14 @@ async function answerDecision(d, value) {
   } catch (e) {
     alert(`Couldn't save that answer: ${e.message || e}`);
   }
+}
+
+function answerText(d, value) {
+  // what an answer does, in the words of its button ("release for deletion", not "release" or "test")
+  if (value && value.startsWith("new:")) return `new target ${value.slice(4)}`;
+  const o = d.options.find((x) => x.value === value);
+  if (!o) return value;
+  return o.label.charAt(0).toLowerCase() + o.label.slice(1);
 }
 
 function decisionChips(d) {
@@ -1251,8 +1318,7 @@ function renderDecisions(p) {
   card.style.display = p.decisions.length ? "block" : "none";
   const open = p.decisions.filter((d) => d.resolved === null).length;
   setStepBadge("decisions-badge", open ? "warn" : "ok", open ? `${open} open` : "all have answers or defaults");
-  const rank = (d) => (d.answer !== null ? 2 : d.resolved === null ? 0 : 1);  // open first, then defaulted, then answered
-  [...p.decisions].sort((a, b) => rank(a) - rank(b)).forEach((d) => {
+  p.decisions.forEach((d) => {   // keep the planner's order: answering a decision doesn't move it
     const cls = d.answer !== null ? "answered" : d.resolved === null ? "" : "defaulted";
     const collapsed = state.collapsedDecisions.has(d.id);
     const files = d.items.map((src) => state.itemsBySrc[src]).filter(Boolean);
@@ -1263,7 +1329,7 @@ function renderDecisions(p) {
     const header = el("div", { class: "decision-header", onclick: toggle, title: collapsed ? "expand" : "collapse" }, [
       el("span", { class: "decision-chevron" }, [collapsed ? "▸" : "▾"]),
       el("span", { class: `badge ${d.resolved === null ? "warn" : "accent"}` }, [d.title || d.kind]),
-      el("span", { class: "hint", style: "margin:0;" }, [d.answer !== null ? `answered: ${d.answer}` : d.resolved === null ? "needs your answer" : `default: ${d.resolved}`]),
+      el("span", { class: "hint", style: "margin:0;" }, [d.answer !== null ? `answered: ${answerText(d, d.answer)}` : d.resolved === null ? "needs an answer" : `default: ${answerText(d, d.resolved)}`]),
       d.answer !== null ? el("span", {
         class: "toggle-adv", style: "margin:0 0 0 auto;",
         onclick: (e) => { e.stopPropagation(); answerDecision(d, null); },
@@ -1470,6 +1536,7 @@ async function loadPlan(refresh) {
     if (refresh) await api("POST", "/api/scan");
     const [plan, preview, batches] = await Promise.all([api("GET", "/api/plan"), api("GET", "/api/copy/preview"), api("GET", "/api/batches")]);
     state.copyPreview = preview;
+    state.batches = batches.batches;
     state.lastBatch = batches.batches[0] || null;
     applyPlan(plan);
     if (!state.copyRunning) renderCopy();
@@ -1488,24 +1555,30 @@ document.getElementById("rescan-btn").addEventListener("click", async (e) => {
   await loadPlan(true);
   e.target.disabled = false;
 });
-document.getElementById("connect-next-btn").addEventListener("click", () => { state.activeStep = "scan"; showActiveStep(); });
-document.getElementById("select-next-btn").addEventListener("click", () => { state.activeStep = "stage"; showActiveStep(); });
-document.getElementById("stage-next-btn").addEventListener("click", () => { state.activeStep = "review"; showActiveStep(); });
+document.getElementById("connect-next-btn").addEventListener("click", () => goTo("scan", "connect"));
+document.getElementById("select-next-btn").addEventListener("click", () => goTo("stage", "scan"));
+document.getElementById("stage-next-btn").addEventListener("click", () => goTo("review", "stage"));
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
 document.getElementById("copy-run-btn").addEventListener("click", runCopy);
 document.getElementById("catalog-run-btn").addEventListener("click", runCatalog);
-document.getElementById("catalog-next-btn").addEventListener("click", () => { state.activeStep = "clean"; showActiveStep(); });
+document.getElementById("catalog-next-btn").addEventListener("click", () => goTo("clean", "catalog"));
 document.getElementById("clean-verify-btn").addEventListener("click", runCleanVerify);
 document.getElementById("clean-run-btn").addEventListener("click", runCleanDelete);
-document.getElementById("review-next-btn").addEventListener("click", () => { state.activeStep = "copy"; showActiveStep(); });
-document.getElementById("copy-next-btn").addEventListener("click", () => { state.activeStep = "catalog"; showActiveStep(); });
+document.getElementById("review-next-btn").addEventListener("click", () => goTo("copy", "review"));
+document.getElementById("copy-next-btn").addEventListener("click", () => goTo("catalog", "copy"));
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
 document.getElementById("find-btn").addEventListener("click", () => findDevices(false));
 document.getElementById("find-all-btn").addEventListener("click", () => findDevices(true));
-document.getElementById("quality-sigma-btn").addEventListener("click", async () => {
-  const v = document.getElementById("quality-sigma").value;
-  applyPlan(await api("POST", "/api/answers", { "quality-sigma": v }));
+// σ slider: flags and charts follow while dragging (computed locally); the server applies it on release
+document.getElementById("quality-sigma").addEventListener("input", (e) => {
+  state.sigmaLive = Number(e.target.value);
+  renderReview();
+});
+document.getElementById("quality-sigma").addEventListener("change", async (e) => {
+  const plan = await api("POST", "/api/answers", { "quality-sigma": String(e.target.value) });
+  state.sigmaLive = null;
+  applyPlan(plan);
 });
 
 (async function init() {

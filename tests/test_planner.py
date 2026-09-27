@@ -361,7 +361,7 @@ def test_excluded_frames_and_sets(w):
     everything = w.plan({f"exclude:{r}": "1" for r in rels})
     assert everything.sessions == [] and everything.decisions == []          # no session, no questions
     flat = by_name(everything, "Flat_")[0]
-    assert flat.action == P.EXCLUDED and "lights were all excluded" in flat.reason   # flats follow their lights
+    assert flat.action == P.EXCLUDED and "lights were all left out on Select" in flat.reason   # flats follow their lights
 
 
 def test_excluding_keeps_decision_ids_stable(w):

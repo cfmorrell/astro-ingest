@@ -245,7 +245,7 @@ class _Planner:
         for rel, it in items.items():
             if it.action in (COPY, PENDING) and self.answers.get(f"exclude:{rel}") == "1":
                 it.action, it.dsts, it.retire = EXCLUDED, [], []   # a left-out replacement retires nothing either
-                it.reason = "excluded by you on the Select step"
+                it.reason = "left out on Select"
 
     def entry_item(self, e: SourceEntry, action: str, reason: str) -> PlanItem:
         it = PlanItem(e.rel, e.size, action, reason=reason)
@@ -301,9 +301,9 @@ class _Planner:
                         "Damaged copy on NAS" if truncated else "Different copy on NAS")
         if d.resolved == "replace":
             it.action, it.dsts, it.retire = COPY, [diff[0]], list(diff)
-            it.reason = "replaces a bad copy on the NAS (Chris)"
+            it.reason = "replaces a damaged copy on the NAS"
         elif d.resolved == "skip":
-            it.action, it.reason = SKIP, "left on the ASIAIR (Chris)"
+            it.action, it.reason = SKIP, "left on the ASIAIR (answered on Review)"
         else:
             it.action, it.reason = PENDING, "a different file with this name is already on the NAS"
 
@@ -451,7 +451,7 @@ class _Planner:
         if len(live) <= TINY_GROUP:
             d = self.decide("tiny-group", gid, f"Only {len(live)} {obj} light{'s' if len(live) != 1 else ''} on "
                             f"{night}. A session, or test frames?",
-                            [("file", "File as a session"), ("test", "Test frames: offer for deletion")], None,
+                            [("file", "File as a session"), ("test", "Test frames: release for deletion")], None,
                             [f.rel for f in fs if status[f.rel].action == COPY], gid)
             if d.resolved is None:
                 link.decision = d.id
@@ -462,7 +462,7 @@ class _Planner:
             if d.resolved == "test":
                 for it in status.values():
                     if it.action == COPY:
-                        it.action, it.reason = NOT_KEPT, "test frames (Chris)"
+                        it.action, it.reason = NOT_KEPT, "test frames: released for deletion on Review"
                 return
         folder = rules.session_name(night, target.name, cam.token, scope.token)
         session = self.session(target.folder, folder, new_target)
@@ -492,7 +492,7 @@ class _Planner:
             for it in status.values():
                 if it.action == COPY:
                     it.action = PENDING if answer is None else SKIP
-                    it.reason = "target unclear" if answer is None else "left on the ASIAIR (Chris)"
+                    it.reason = "target unclear" if answer is None else "left on the ASIAIR (answered on Review)"
             return None, False
         if answer.startswith("new:"):
             folder = answer[4:] or obj.replace(" ", "")
@@ -533,7 +533,7 @@ class _Planner:
                 if d.resolved == "append":
                     it.action, it.reason = APPEND, f"missing from {session.rel}"
                 else:
-                    it.action, it.reason, it.dsts = SKIP, "left on the ASIAIR (Chris)", []
+                    it.action, it.reason, it.dsts = SKIP, "left on the ASIAIR (answered on Review)", []
         else:
             for rel in new:
                 status[rel].reason = f"new session {session.rel}" if not session.exists else ""
@@ -644,7 +644,7 @@ class _Planner:
             for it in items.values():
                 if it.action == COPY:
                     it.action, it.dsts = EXCLUDED, []
-                    it.reason = "its lights were all excluded by you; include them here if you still want these"
+                    it.reason = "its lights were all left out on Select; include them there to keep these"
             return
         if not targets and waiting:
             d = self.decisions[waiting[0]]
@@ -662,7 +662,7 @@ class _Planner:
                             [f.rel for f in fs], gid, "Unmatched flats" if kind == "flats" else "Unmatched dark flats")
             for it in items.values():
                 if d.resolved == "release":
-                    it.action, it.reason = NOT_KEPT, "no matching lights; released for deletion (Chris)"
+                    it.action, it.reason = NOT_KEPT, "no matching lights: released for deletion on Review"
                 else:
                     it.action, it.reason = NO_LIGHTS, "no matching lights found on the ASIAIR or the NAS"
             return
@@ -840,12 +840,12 @@ class _Planner:
                 if chosen["from"] == "source":
                     it = self.items[src]
                     it.dsts.append(dst)
-                    it.reason += f"; borrowed by {s.folder} (Chris)"
+                    it.reason += f"; borrowed by {s.folder}"
                 files.append({"from": chosen["from"], "src": src, "size": size, "dst": dst})
                 s.flats += 1
                 s.bytes += size
             s.warnings = [w for w in s.warnings if w != "no flats found for these lights"]
-            s.warnings.append(f"flats borrowed from {chosen['session'].split('/')[1]} (Chris)")
+            s.warnings.append(f"flats borrowed from {chosen['session'].split('/')[1]}")
             self.borrowed.append({"session": s.rel, "from": chosen["session"], "decision": d.id, "files": files})
 
     def flat_donors(self, s: PlannedSession, lg: Group, angles: list[int]) -> list[dict]:

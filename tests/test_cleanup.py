@@ -28,7 +28,7 @@ def groups(pv):
 def test_preview_groups_after_a_copy(tmp_path):
     cfg, air, root, p = copied(tmp_path)
     g = groups(cleanup.preview(cfg, p))
-    assert len(g["verified"]["items"]) == 4 + 4 + 2 and g["verified"]["ticked"]
+    assert len(g["verified"]["items"]) == 4 + 4 + 2 and g["verified"]["recommended"] and not g["verified"]["ticked"]
     assert all(i["thumb"] and i["nas"] for i in g["verified"]["items"])
     assert [i["rel"].endswith("_0005.fit") for i in g["rejected"]["items"]] == [True]
     assert not g["rejected"]["ticked"] and "loses them" in g["rejected"]["note"]

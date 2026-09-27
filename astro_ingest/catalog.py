@@ -194,7 +194,7 @@ def preview(cfg: Config, today: dt.date | None = None) -> Preview:
     log_lines += [f"| {today.isoformat()} | Damaged NAS copy `{r}` retired to `_to_delete/` and replaced from the "
                   "ASIAIR by astro-ingest. |" for r in retired]
     log_lines += [f"| {today.isoformat()} | New library batch `{f}` ingested by astro-ingest. |" for f in sorted(lib_folders)]
-    log_lines += [f"| {today.isoformat()} | `{s}` borrowed flats from `{src}` (Chris approved). |"
+    log_lines += [f"| {today.isoformat()} | `{s}` borrowed flats from `{src}` (approved on Review). |"
                   for s, src in sorted(borrowed.items())]
     return Preview([b["id"] for b in batches], sorted(touched), changes, new_rows, gaps, log_lines)
 

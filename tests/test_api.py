@@ -142,3 +142,18 @@ def test_answering_decisions(tmp_path):
     assert next(x for x in plan["decisions"] if x["id"] == d["id"])["answer"] == "skip"
     plan = client.post("/api/answers", json={d["id"]: None}).json()           # reset
     assert next(x for x in plan["decisions"] if x["id"] == d["id"])["resolved"] is None
+
+
+
+def test_log_files_are_served_by_name_only(tmp_path):
+    client, air, root = make_app(tmp_path)
+    logs = root / "state" / "logs"
+    (logs / "jobs").mkdir(parents=True)
+    (logs / "copy-20260927-101010.log").write_text("OK\tcopy\n")
+    (logs / "jobs" / "abc123.log").write_text("=== job ===\n")
+    (root / "state" / "answers.json").write_text("{}")
+    r = client.get("/api/logs/copy-20260927-101010.log")
+    assert r.status_code == 200 and r.text == "OK\tcopy\n" and r.headers["content-type"].startswith("text/plain")
+    assert client.get("/api/logs/jobs/abc123.log").text == "=== job ===\n"
+    for bad in ("/api/logs/..%2Fanswers.json", "/api/logs/answers.json", "/api/logs/nothing-here.log"):
+        assert client.get(bad).status_code == 404, bad

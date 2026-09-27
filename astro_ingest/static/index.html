@@ -29,7 +29,7 @@
       <div class="progress-wrap">
         <button id="find-btn" class="primary">Find devices</button>
         <button id="find-all-btn" class="ghost">Search the whole network</button>
-        <button id="connect-next-btn" class="ghost">Next: Scan →</button>
+        <button id="connect-next-btn" class="ghost">Next: Scan Images →</button>
       </div>
       <div id="find-result" style="margin-top:12px;"></div>
       <p class="hint">Looks for capture devices on the home network (today: ZWO ASIAIR). Finding a device only logs in as guest and lists the top of its share; nothing on it is opened, changed or deleted.</p>
@@ -46,20 +46,20 @@
       <div id="scan-body"></div>
       <div class="progress-wrap">
         <button id="rescan-btn" class="ghost">↻ Scan again</button>
+        <span id="scanned-at" class="hint" style="margin-left:8px;"></span>
       </div>
       <p class="hint">Scanning only reads: it lists every file and reads frame headers in Autorun/ and Plan/. Nothing is written or deleted.</p>
     </div>
 
     <div class="card select-summary">
       <div class="card-header">
-        <div class="card-title">Choose what to read from the device</div>
-        <div id="select-status-badge" class="badge">loading</div>
+        <div class="card-title">Choose what to stage from the device</div>
       </div>
       <div id="select-summary"></div>
       <div class="progress-wrap">
         <button id="select-next-btn" class="primary">Next: Stage →</button>
       </div>
-      <p class="hint">Every frame that would be read is below, oldest first (left to right, top to bottom); frames already on the NAS aren't. Click a thumbnail to leave it out, or leave out a whole set. Left-out frames stay on the ASIAIR and are offered for deletion, called out, on the Clean-up step.</p>
+      <p class="hint">A quick first pass using the ASIAIR's own thumbnails: leave out anything obviously bad (clouds, trailing, dawn). Every light frame you keep is scored in detail on Review. Frames not yet on the NAS are below, oldest first (left to right, top to bottom); click a thumbnail to leave it out, or leave out a whole set. Left-out frames are never read; they stay on the ASIAIR and are offered for deletion, called out, on Clean up.</p>
     </div>
     <div id="select-sets"></div>
   </section>
@@ -81,7 +81,7 @@
         <button id="stage-next-btn" class="ghost" style="display:none;">Next: Review →</button>
       </div>
       <div id="stage-result"></div>
-      <p class="hint">Each selected frame is read from the device once, checksummed on the way in, and written to the staging share; scoring, previews and filing then work from that copy at disk speed. Nothing on the device is changed. If the connection drops, press Stage again to continue where it stopped.</p>
+      <p class="hint">Stage reads each selected frame from the ASIAIR once over Wi-Fi, checksums it on the way in, and saves it to the staging share. Light frames are then scored for Review, and Copy &amp; verify copies from staging at disk speed. Nothing is deleted from the ASIAIR until Clean up. If the connection drops, press Stage again to pick up where it stopped.</p>
     </div>
   </section>
 
@@ -95,26 +95,18 @@
       <div id="review-summary"></div>
       <div class="field-row" style="align-items:flex-end; margin-top:12px;">
         <div class="field" style="flex:0 0 auto; margin-bottom:0;">
-          <label>Frame quality</label>
-          <button id="quality-run-btn">Score light frames</button>
-        </div>
-        <div class="field" style="flex:0 0 auto; margin-bottom:0;">
-          <label>Outlier sensitivity (σ): lower flags more frames</label>
-          <div style="display:flex; gap:6px;">
-            <input type="number" id="quality-sigma" step="0.5" min="1" max="10" style="width:80px;" />
-            <button id="quality-sigma-btn" class="ghost">Apply</button>
+          <label for="quality-sigma">Outlier sensitivity: lower flags more frames</label>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <input type="range" id="quality-sigma" step="0.5" min="2" max="8" style="width:220px;" />
+            <span id="quality-sigma-value" class="session-path"></span>
           </div>
         </div>
         <div class="field hint" id="quality-status" style="margin-bottom:0;"></div>
       </div>
-      <div id="quality-progress" class="progress-wrap" style="display:none;">
-        <div class="progress-bar"><div class="progress-fill"></div></div>
-        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
-      </div>
       <div class="progress-wrap">
         <button id="review-next-btn" class="primary">Next: Copy &amp; verify →</button>
       </div>
-      <p class="hint">Each light frame is scored against the rest of its group (star count, FWHM, eccentricity, SNR, sky background), the same way astro-stacker reviews lights. Red-bordered frames are recommended <b>not</b> to be ingested; click one to see why, and keep it if you disagree. Decisions and the copy itself arrive in phase 4.</p>
+      <p class="hint">Each light frame is scored against the rest of its group (star count, FWHM, eccentricity, SNR, sky background), the same way astro-stacker reviews lights. Red-bordered frames are recommended <b>not</b> to be ingested; click one to see why, and keep it if you disagree. Nothing is copied until you approve it on Copy &amp; verify.</p>
     </div>
 
     <div class="card" id="decisions-card" style="display:none;">
@@ -122,13 +114,21 @@
         <div class="card-title">Decisions</div>
         <div id="decisions-badge" class="badge"></div>
       </div>
+      <p class="hint" style="margin-top:0;">Frames the app can't file on its own wait here for an answer: a target it doesn't recognize, flats with no lights to go with, a very small group of lights, a damaged copy already on the NAS, or frames missing from a session that's already there. Where a safe default exists it's pre-selected; nothing under a decision is copied or deleted until it has an answer.</p>
       <div id="decisions-list"></div>
     </div>
 
     <div class="card">
       <div class="card-header">
         <div class="card-title">Sessions</div>
-        <div id="sessions-badge" class="badge"></div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <div id="sessions-badge" class="badge"></div>
+          <button id="quality-run-btn" class="small">Score light frames</button>
+        </div>
+      </div>
+      <div id="quality-progress" class="progress-wrap" style="display:none; margin-top:0; margin-bottom:12px;">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
       </div>
       <div id="sessions-list"></div>
     </div>
@@ -166,7 +166,7 @@
         <button id="copy-next-btn" class="ghost">Next: Catalog →</button>
       </div>
       <div id="copy-result"></div>
-      <p class="hint">Copies each staged frame to its destination on the Astronomy share and checks it against the checksum taken when it was read from the device. Nothing is ever overwritten: a different file already at a destination is skipped and listed. A damaged NAS copy you chose to replace is moved to <code>_to_delete/</code> first. Staged copies are cleared as their NAS copies verify. Nothing on the device is touched.</p>
+      <p class="hint">Copies each staged frame to its place on the Astronomy share, then checks the copy against the checksum taken when it came off the ASIAIR. Where a damaged NAS copy is being replaced (answered on Review), the old copy is moved to <code>_to_delete/</code> first. Otherwise nothing on the NAS is overwritten: if a different file is already at a destination, it's skipped and listed. Staged copies are cleared once their NAS copies check out. Nothing is deleted from the ASIAIR until Clean up.</p>
     </div>
     <div class="card">
       <div class="card-header"><div class="card-title">Where it goes</div><div id="copy-dests-badge" class="badge"></div></div>
@@ -193,7 +193,7 @@
         <button id="catalog-next-btn" class="ghost">Next: Clean up →</button>
       </div>
       <div id="catalog-result"></div>
-      <p class="hint">After Copy &amp; verify: writes <code>PROJECT_INFO.txt</code> for each session that received frames, adds new targets to <code>targets.csv</code> (the previous version is kept in <code>_to_delete/</code>), brings the index links (<code>100-</code>…<code>103-</code>) and <code>ZZ_TARGET_INDEX.md</code> up to date, adds sibling-night lines to <code>.project_notes.txt</code> (never edits them), and notes borrowed flats in <code>.flats_are_copies</code>. Reads only the NAS; nothing on the device is touched.</p>
+      <p class="hint">After Copy &amp; verify: writes <code>PROJECT_INFO.txt</code> for each session that received frames, adds new targets to <code>targets.csv</code> (the previous version is kept in <code>_to_delete/</code>), brings the index links (ByMessierNumber, ByNGCNumber, ByICNumber, ByDate) and <code>ZZ_TARGET_INDEX.md</code> up to date, adds sibling-night lines to <code>.project_notes.txt</code> (never edits them), and notes borrowed flats in <code>.flats_are_copies</code>. Works only on the NAS; nothing is deleted from the ASIAIR.</p>
     </div>
     <div class="card">
       <div class="card-header"><div class="card-title">What will be written</div><div id="catalog-changes-badge" class="badge"></div></div>
@@ -225,7 +225,7 @@
       </div>
       <div id="clean-guard"></div>
       <div id="clean-result"></div>
-      <p class="hint">Deletes from the device only what you tick. Frames on the NAS are ticked once a checksum proves the NAS copy is identical: copied by this app, or checked by <strong>Verify</strong>, which reads each older frame from the device once. Everything else is called out and left unticked. Each <code>.fit</code> goes with its <code>_thn.jpg</code>. Right before deleting, the device is listed again (every file must be unchanged, and nothing written in the last 15 minutes) and each NAS copy is re-checked. Nothing on the NAS is touched.</p>
+      <p class="hint">Deletes from the device only what you tick; nothing is ticked for you. Frames whose NAS copy a checksum proves identical are marked <b>recommended</b>: copied by this app, or checked by <strong>Verify</strong>, which reads each older frame from the device once. Everything else is called out. Each <code>.fit</code> goes with its <code>_thn.jpg</code>. Right before deleting, the device is listed again (every file must be unchanged, and nothing written in the last 15 minutes) and each NAS copy is re-checked. Nothing on the NAS is touched.</p>
     </div>
     <div id="clean-groups"></div>
   </section>

@@ -34,7 +34,8 @@ from astro_ingest.staging import CHUNK, StagingStore
 
 RECENT_S = 15 * 60
 
-# group id -> (label, selectable, ticked by default, note)
+# group id -> (label, selectable, recommended, note). Nothing is ticked by default (Chris, 2026-09-27): recommended
+# groups are marked as such and ticked with one click.
 GROUPS = {
     "verified": ("On the NAS, checksum verified", True, True, ""),
     "to-verify": ("On the NAS, not verified yet", False, False, "run Verify first: the device file is read once and "
@@ -42,14 +43,14 @@ GROUPS = {
     "differs": ("NAS copy differs", False, False, "same name and size, different content: not offered for deletion"),
     "not-copied": ("Not copied yet", False, False, "copy these first (Copy & verify)"),
     "rejected": ("Rejected for quality", True, False, "not on the NAS: deleting loses them"),
-    "left-out": ("Left out by you", True, False, "not on the NAS: deleting loses them"),
+    "left-out": ("Left out on Select", True, False, "not on the NAS: deleting loses them"),
     "over-cap": ("Beyond the 10-frame cap", True, False, "not on the NAS (the first 10 of the set are)"),
     "not-kept": ("Not kept by the rules", True, False, "not on the NAS"),
     "other": ("Other files", True, False, "not written by the ASIAIR's capture"),
     "orphan-thumb": ("Orphan thumbnails", True, False, "thumbnails whose .fit is gone"),
-    "blocked": ("Flats without lights", False, False, "blocked until you file or release them (Review)"),
+    "blocked": ("Flats without lights", False, False, "kept until they're filed or released for deletion on Review"),
     "waiting": ("Waiting on a decision", False, False, "answer it in Review"),
-    "never": ("Never touched", False, False, "Live, Preview, Video, log, … and files you chose to leave"),
+    "never": ("Never touched", False, False, "Live, Preview, Video, log, … and files left on the ASIAIR on Review"),
 }
 CALLOUT_GROUP = {P.REJECTED: "rejected", P.EXCLUDED: "left-out", P.OVER_CAP: "over-cap", P.NOT_KEPT: "not-kept",
                  P.UNRECOGNIZED: "other", P.ORPHAN_THUMB: "orphan-thumb", P.NO_LIGHTS: "blocked",
@@ -89,10 +90,11 @@ class Preview:
         for c in self.candidates:
             by[c.group].append(c)
         out = []
-        for gid, (label, selectable, ticked, note) in GROUPS.items():
+        for gid, (label, selectable, recommended, note) in GROUPS.items():
             cs = by.get(gid, [])
             if cs:
-                out.append({"id": gid, "label": label, "selectable": selectable, "ticked": ticked, "note": note,
+                out.append({"id": gid, "label": label, "selectable": selectable, "recommended": recommended,
+                            "ticked": False, "note": note,
                             "files": len(cs) + sum(1 for c in cs if c.thumb), "bytes": sum(c.bytes for c in cs),
                             "items": [c.to_dict() for c in cs] if gid != "never" else []})
         return out

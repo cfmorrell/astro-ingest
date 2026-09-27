@@ -12,7 +12,7 @@ import re
 import threading
 from pathlib import Path, PurePosixPath
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -24,6 +24,7 @@ from astro_ingest.core import imaging
 STATIC_DIR = Path(__file__).parent / "static"
 PREVIEW_SIZES = (analysis.THUMB_SIZE, analysis.FULL_SIZE)
 FRAME_KINDS = ("Light", "Flat", "Dark", "Bias", "DarkFlat")
+LOG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.log")   # a plain file name in STATE_DIR/logs (no paths)
 
 
 def _safe_rel(rel: str) -> str:
@@ -58,12 +59,13 @@ def create_app(cfg: Config) -> FastAPI:
     def plan_json(p: service.Planned) -> dict:
         rate, rate_kind = service.transfer_rate(cfg)
         store = staging.StagingStore(cfg)
+        last_seconds = (store.rate or {}).get("seconds")
         entries = {f.rel: f.entry for f in p.scan.frames}
         slug = getattr(p.source, "slug", None)
         staged = {i.src for i in p.plan.items if i.src in entries and slug and i.action in staging.STAGEABLE
                   and not staging.needs_staging(store, slug, entries[i.src], i.action)}
         out = {**p.plan.to_dict(), "scanned_at": p.scanned_at.isoformat(timespec="seconds"), "sigma": p.sigma,
-               "sigma_default": service.quality.INGEST_ANOMALY_Z_THRESHOLD, "rate_mb_s": rate, "rate_kind": rate_kind,
+               "sigma_default": service.quality.INGEST_ANOMALY_Z_THRESHOLD, "rate_mb_s": rate, "rate_kind": rate_kind, "rate_seconds": last_seconds,
                "stageable_actions": list(staging.STAGEABLE)}
         for item in out["items"]:
             item["staged"] = item["src"] in staged
@@ -315,7 +317,12 @@ def create_app(cfg: Config) -> FastAPI:
             if frame is None or item is None or item.kind not in FRAME_KINDS:
                 raise HTTPException(404, "not a frame on the source")
             key = analysis.src_key(frame.entry.rel, frame.entry.size, frame.entry.mtime)
-            opener, kind = (lambda: source().open_read(rel)), item.kind
+            src = p.source   # the staged copy when there is one (a plain source() would read the device)
+            if not analysis.render_path(cfg, key, size).is_file() and not getattr(src, "is_fast", lambda r: True)(rel):
+                # never read a whole frame over the device's Wi-Fi just to show it (left-out frames are never read
+                # at all): the page shows the device's own thumbnail instead
+                raise HTTPException(409, "not staged: use the device's thumbnail")
+            opener, kind = (lambda: src.open_read(rel)), item.kind
         else:
             nas = _safe_rel(nas)
             files = [f for fl in p.index.files.values() for f in fl if f.rel == nas]
@@ -371,6 +378,19 @@ def create_app(cfg: Config) -> FastAPI:
         if job is None:
             raise HTTPException(404, "unknown job")
         return job.log_path.read_text() if job.log_path.exists() else ""
+
+    # ---------------- logs (linked from the results of Copy & verify, Catalog and Clean up)
+
+    @app.get("/api/logs/{name}")
+    @app.get("/api/logs/jobs/{name}")
+    def log_file(name: str, request: Request):
+        if not LOG_NAME.fullmatch(name):
+            raise HTTPException(404, "no such log")
+        folder = Path(cfg.state_dir) / "logs" / ("jobs" if "/logs/jobs/" in request.url.path else "")
+        path = folder / name
+        if not path.is_file():
+            raise HTTPException(404, "no such log")
+        return Response(path.read_bytes(), media_type="text/plain; charset=utf-8")
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
