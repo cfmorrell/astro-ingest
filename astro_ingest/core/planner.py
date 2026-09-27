@@ -295,7 +295,7 @@ class _Planner:
                         f"{frame.entry.size / 1e6:.1f} MB{' (the NAS copy looks truncated)' if truncated else ''}. "
                         "Replace it?",
                         [("replace", "Replace (old copy to _to_delete)"),
-                         ("skip", "Leave on the ASIAIR")],
+                         ("skip", "Keep on the ASIAIR")],
                         # A damaged NAS copy with a good one here: use the better copy (Chris, 2026-09-25)
                         "replace" if truncated else None, [frame.rel], it.group,
                         "Damaged copy on NAS" if truncated else "Different copy on NAS")
@@ -303,7 +303,7 @@ class _Planner:
             it.action, it.dsts, it.retire = COPY, [diff[0]], list(diff)
             it.reason = "replaces a damaged copy on the NAS"
         elif d.resolved == "skip":
-            it.action, it.reason = SKIP, "left on the ASIAIR (answered on Review)"
+            it.action, it.reason = SKIP, "kept on the ASIAIR (answered on Review)"
         else:
             it.action, it.reason = PENDING, "a different file with this name is already on the NAS"
 
@@ -368,7 +368,7 @@ class _Planner:
                 self.item(f, PENDING, "filename time disagrees with DATE-OBS")
             d = self.decide("clock", folder, f"{len(fs)} frame(s) in {folder.split('/')[-1]}: the filename time "
                             "disagrees with DATE-OBS (ASIAIR clock or time zone). Use the filename time?",
-                            [("use", "Use the filename time"), ("skip", "Leave on the ASIAIR")], None,
+                            [("use", "Use the filename time"), ("skip", "Keep on the ASIAIR")], None,
                             [f.rel for f in fs])
             if d.resolved == "use":
                 for f in fs:
@@ -435,14 +435,14 @@ class _Planner:
         cam = rules.camera_from(cam_token)
         if cam is None:
             self.pending_group(link, status, "camera", f"{len(fs)} {obj} lights ({night}): camera not recognized.",
-                               [("skip", "Leave on the ASIAIR")])
+                               [("skip", "Keep on the ASIAIR")])
             return
         if scope is None:
             self.pending_group(
                 link, status, "scope",
                 f"{obj} ({night}): focal length {fl:g} mm matches no telescope. Which was it?"
                 if fl is not None else f"{obj} ({night}): no focal length in the headers. Which telescope?",
-                [(s.token or "", s.name) for _, _, s in rules.FOCAL_LENGTH_SCOPES] + [("skip", "Leave on the ASIAIR")])
+                [(s.token or "", s.name) for _, _, s in rules.FOCAL_LENGTH_SCOPES] + [("skip", "Keep on the ASIAIR")])
             return
         target, new_target = self.resolve_target(link, status, obj, night)
         if target is None:
@@ -451,18 +451,24 @@ class _Planner:
         if len(live) <= TINY_GROUP:
             d = self.decide("tiny-group", gid, f"Only {len(live)} {obj} light{'s' if len(live) != 1 else ''} on "
                             f"{night}. A session, or test frames?",
-                            [("file", "File as a session"), ("test", "Test frames: release for deletion")], None,
+                            [("skip", "Keep on the ASIAIR"), ("file", "File as a session"),
+                             ("test", "Release for deletion")], None,
                             [f.rel for f in fs if status[f.rel].action == COPY], gid)
             if d.resolved is None:
                 link.decision = d.id
                 for it in status.values():
                     if it.action == COPY:
-                        it.action, it.reason = PENDING, "small group: file or test frames?"
+                        it.action, it.reason = PENDING, "small group: keep, file, or release?"
                 return
             if d.resolved == "test":
                 for it in status.values():
                     if it.action == COPY:
                         it.action, it.reason = NOT_KEPT, "test frames: released for deletion on Review"
+                return
+            if d.resolved == "skip":
+                for it in status.values():
+                    if it.action == COPY:
+                        it.action, it.reason, it.dsts = SKIP, "kept on the ASIAIR (answered on Review)", []
                 return
         folder = rules.session_name(night, target.name, cam.token, scope.token)
         session = self.session(target.folder, folder, new_target)
@@ -479,7 +485,7 @@ class _Planner:
         cid = catalog_id(obj)
         proposal = f"{cid[0]}{cid[1]}" if cid and cid[0] in ("M", "NGC", "IC") else None
         options.append((f"new:{proposal}" if proposal else "new:", "New target (you name it)"))
-        options.append(("skip", "Leave on the ASIAIR"))
+        options.append(("skip", "Keep on the ASIAIR"))
         question = (f"'{obj}' ({night}) matches {len(m.candidates)} targets. Which one?" if m.candidates else
                     f"'{obj}' ({night}) isn't in targets.csv. New target?")
         d = self.decide("target", (obj, g.camera, g.scope), question, options, None,
@@ -492,7 +498,7 @@ class _Planner:
             for it in status.values():
                 if it.action == COPY:
                     it.action = PENDING if answer is None else SKIP
-                    it.reason = "target unclear" if answer is None else "left on the ASIAIR (answered on Review)"
+                    it.reason = "target unclear" if answer is None else "kept on the ASIAIR (answered on Review)"
             return None, False
         if answer.startswith("new:"):
             folder = answer[4:] or obj.replace(" ", "")
@@ -526,14 +532,14 @@ class _Planner:
             d = self.decide("append", (session.rel, g.id),
                             f"{len(new)} {g.object} light{'s' if len(new) != 1 else ''} from {g.night} aren't in that "
                             "session on the NAS (maybe subs you once dropped). Append them?",
-                            [("append", "Append to the session"), ("skip", "Leave on the ASIAIR")], "append",
+                            [("append", "Append to the session"), ("skip", "Keep on the ASIAIR")], "append",
                             new, g.id)
             for rel in new:
                 it = status[rel]
                 if d.resolved == "append":
                     it.action, it.reason = APPEND, f"missing from {session.rel}"
                 else:
-                    it.action, it.reason, it.dsts = SKIP, "left on the ASIAIR (answered on Review)", []
+                    it.action, it.reason, it.dsts = SKIP, "kept on the ASIAIR (answered on Review)", []
         else:
             for rel in new:
                 status[rel].reason = f"new session {session.rel}" if not session.exists else ""
@@ -755,7 +761,7 @@ class _Planner:
         self.apply_exclusions(items)
         if cam is None or not cam.cooled:
             self.pending_group(g, items, "camera", f"{kind} from {g.night}: camera not recognized, no library for it.",
-                               [("skip", "Leave on the ASIAIR")])
+                               [("skip", "Keep on the ASIAIR")])
             return
         folder = (rules.bias_dir(cam, g.night, mean_temp) if kind == "bias"
                   else rules.dark_dir(cam, f0.name.exposure_s, g.night, mean_temp))
@@ -768,7 +774,7 @@ class _Planner:
             d = self.decide("library-folder", folder,
                             f"The {kind} library folder for {g.night} ({folder.split('/')[-1]}) already holds "
                             f"{len(others)} other frame(s). Never merged: leave these on the ASIAIR?",
-                            [("skip", "Leave on the ASIAIR")], None, new, gid)
+                            [("skip", "Keep on the ASIAIR")], None, new, gid)
             for r in new:
                 items[r].action = SKIP if d.resolved == "skip" else PENDING
                 items[r].reason = f"{folder} already holds other frames"

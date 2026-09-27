@@ -51,7 +51,7 @@ GROUPS = {
     "orphan-thumb": ("Orphan thumbnails", True, False, "thumbnails whose .fit is gone"),
     "blocked": ("Flats without lights", False, False, "kept until they're filed or released for deletion on Review"),
     "waiting": ("Waiting on a decision", False, False, "answer it in Review"),
-    "never": ("Never touched", False, False, "Live, Preview, Video, log, … and files left on the ASIAIR on Review"),
+    "never": ("Never touched", False, False, "Live, Preview, Video, log, … and files kept on the ASIAIR on Review"),
 }
 CALLOUT_GROUP = {P.REJECTED: "rejected", P.EXCLUDED: "left-out", P.OVER_CAP: "over-cap", P.NOT_KEPT: "not-kept",
                  P.UNRECOGNIZED: "other", P.ORPHAN_THUMB: "orphan-thumb", P.NO_LIGHTS: "blocked",

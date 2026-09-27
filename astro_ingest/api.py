@@ -68,11 +68,14 @@ def create_app(cfg: Config) -> FastAPI:
         slug = getattr(p.source, "slug", None)
         staged = {i.src for i in p.plan.items if i.src in entries and slug and i.action in staging.STAGEABLE
                   and not staging.needs_staging(store, slug, entries[i.src], i.action)}
+        # a staged copy on disk, whatever the answer now is: previews keep rendering from it when an answer changes
+        on_disk = {i.src for i in p.plan.items if i.src in entries and slug and store.get(slug, entries[i.src])}
         out = {**p.plan.to_dict(), "scanned_at": p.scanned_at.isoformat(timespec="seconds"), "sigma": p.sigma,
                "sigma_default": service.quality.INGEST_ANOMALY_Z_THRESHOLD, "rate_mb_s": rate, "rate_kind": rate_kind, "rate_seconds": last_seconds,
                "stageable_actions": list(staging.STAGEABLE)}
         for item in out["items"]:
             item["staged"] = item["src"] in staged
+            item["has_staged_copy"] = item["src"] in on_disk
         return out
 
     @app.get("/health")

@@ -1703,3 +1703,14 @@ details > summary.toggle-adv::-webkit-details-marker { display: none; }
 .so-keep { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .so-keep input { accent-color: var(--accent); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Review (proposal L): frames already on the NAS are context; the replacement frame is highlighted */
+.frame-card.nas { opacity: 0.5; filter: saturate(0.55); border-style: dashed; border-left: 1px dashed var(--border-strong); }
+.frame-card.new { border-left-color: var(--accent); }
+.frame-card.focus { border-color: var(--warn); border-left: 3px solid var(--warn); box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25); }
+.frame-tag { text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: #a5b4fc; }
+.frame-tag.nas { color: var(--text-muted); }
+.frame-card.flagged .frame-tag { color: #fca5a5; }
+.frame-card.focus .frame-tag { color: var(--warn); }
+.decision-context { font-size: 12.5px; color: var(--text-muted); margin: 4px 0 8px; }
+.decision-context a { color: #a5b4fc; }

@@ -229,7 +229,7 @@ function isFrame(item) {
 function previewUrl(item, size) {
   // Rendered from the FITS only when it's cheap: staged, or already on the NAS. Otherwise (left out on Select, not
   // staged yet) the device's own small thumbnail; a whole frame is never read over Wi-Fi just to show it.
-  if (item.staged || state.plan.source.startsWith("local:")) return `/api/preview?rel=${encodeURIComponent(item.src)}&size=${size}`;
+  if (item.staged || item.has_staged_copy || state.plan.source.startsWith("local:")) return `/api/preview?rel=${encodeURIComponent(item.src)}&size=${size}`;
   if (item.ingested_at && item.ingested_at.length && !(item.retire && item.retire.length)) return `/api/preview?nas=${encodeURIComponent(item.ingested_at[0])}&size=${size}`;
   return item.thumb ? `/api/thumb?rel=${encodeURIComponent(item.thumb)}` : null;
 }
@@ -270,16 +270,17 @@ function frameStatsLine(item) {
   ].join(", ") + `  ·  vs ${q.peers - 1} other frames`;
 }
 
-async function setFrameChoice(items, choiceFor) {
+async function setFrameChoice(items, choiceFor, from) {
   // choiceFor(item) -> "keep" | "reject" | null (null = back to the recommendation)
   const updates = {};
   items.forEach((i) => { updates[`keep:${i.src}`] = choiceFor(i); });
-  answered(await api("POST", "/api/answers", updates));
+  const anchor = from && from.closest ? from.closest("[data-anchor]") : null;
+  answered(await api("POST", "/api/answers", updates), anchor && anchor.dataset.anchor);
 }
 
-function answered(plan) {
-  // after any answer: the plan, then what Copy & verify would copy (it changes with every answer)
-  applyPlan(plan);
+function answered(plan, anchorId) {
+  // after any answer: the plan (keeping the clicked block in place), then what Copy & verify would copy
+  keepInPlace(anchorId, () => applyPlan(plan, true));
   api("GET", "/api/copy/preview").then((pv) => { state.copyPreview = pv; if (!state.copyRunning) renderCopy(); }).catch(() => {});
 }
 
@@ -382,11 +383,20 @@ document.getElementById("lightbox-scroll").addEventListener("click", (e) => {
 
 // ---------- frame cards and strips ----------
 
-function frameCard(item, items, index) {
+function isNewFrame(item) {
+  // a frame this run would bring to the NAS (or is asking about); the rest of a strip is context already on the NAS
+  return item.action !== "already-ingested";
+}
+
+function frameCard(item, items, index, opts = {}) {
   // Border (astro-stacker's meaning): red = flagged, recommended not to ingest; green = scored and fine;
   // grey = not scored (calibration frames, or before scoring); amber = flagged but you chose to keep it.
-  const scored = item.kind === "Light" && item.quality;
-  const cls = !scored ? "unscored" : isKept(item) ? "kept" : isFlagged(item) ? "flagged" : "";
+  // Proposal L: frames already on the NAS are context (dimmed, dashed, "on the NAS"; previews read from the NAS);
+  // quality borders and Keep anyway / Reject appear only on new frames, and only in sessions (`opts.plain` off).
+  const nas = !isNewFrame(item);
+  const focus = opts.focus && opts.focus.has(item.src);
+  const scored = !opts.plain && !nas && item.kind === "Light" && item.quality;
+  const cls = nas ? "nas" : focus ? "focus" : opts.plain ? "new" : !scored ? "unscored" : isKept(item) ? "kept" : isFlagged(item) ? "flagged" : "";
   const card = el("div", { class: `frame-card ${cls}` }, []);
   const url = isFrame(item) ? previewUrl(item, THUMB) : null;
   if (url) {
@@ -395,18 +405,20 @@ function frameCard(item, items, index) {
     img.addEventListener("error", () => { if (item.thumb && !img.src.includes("/api/thumb")) img.src = `/api/thumb?rel=${encodeURIComponent(item.thumb)}`; });
     card.appendChild(img);
   }
+  const tag = nas ? "on the NAS" : item.retire && item.retire.length ? "replaces damaged copy"
+    : scored && isFlagged(item) ? (item.action === "rejected" ? "flagged" : "flagged · kept")
+    : item.action === "append" ? "new · append" : item.action === "copy" ? "new" : actionLabel(item);
   const meta = el("div", { class: "frame-meta" }, [
     el("div", { class: "frame-time", title: item.src }, [isFrame(item) ? frameLabel(item.src) : basename(item.src)]),
-    el("div", { class: "frame-name", title: item.reason || item.src }, [actionLabel(item)]),
+    el("div", { class: `frame-name frame-tag${nas ? " nas" : ""}`, title: item.reason || item.src }, [tag]),
   ]);
-  if (scored && isFlagged(item) && ["copy", "append", "rejected"].includes(item.action)) {
-    const kept = item.action !== "rejected";
+  if (scored && ["copy", "append", "rejected"].includes(item.action)) {
+    const going = item.action !== "rejected";
     meta.appendChild(el("div", { class: "frame-actions" }, [
-      el("span", { class: `badge ${kept ? "warn" : "danger"}` }, [kept ? "kept" : "flagged"]),
       el("button", {
-        class: "small ghost",
-        onclick: (e) => { e.stopPropagation(); setFrameChoice([item], () => (kept ? null : "keep")); },
-      }, [kept ? "reject" : "keep anyway"]),
+        class: "small",
+        onclick: (e) => { e.stopPropagation(); setFrameChoice([item], (i) => wantIngest(i, !going), e.target); },
+      }, [going ? "Reject" : "Keep anyway"]),
     ]));
   }
   card.appendChild(meta);
@@ -414,17 +426,20 @@ function frameCard(item, items, index) {
 }
 
 function computeVisibleItems(stripId, items) {
-  // astro-stacker's: large groups show flagged frames +/- 2 neighbours, the rest collapse into "⋯ N more".
-  // astro-ingest also always shows frames that will actually move (copy/append) or need attention.
-  if (items.length <= LARGE_GROUP_THRESHOLD) return items.map((it, i) => ({ type: "frame", item: it, index: i }));
+  // Proposal L: a strip with frames already on the NAS opens on what's new (plus 2 on either side); the rest
+  // collapses into "⋯ N on the NAS". Otherwise astro-stacker's rule: large groups show flagged frames +/- 2.
+  const context = items.some((it) => !isNewFrame(it));
+  if (!context && items.length <= LARGE_GROUP_THRESHOLD) return items.map((it, i) => ({ type: "frame", item: it, index: i }));
   const expanded = state.expandedGroups[stripId] || new Set();
   const show = new Set();
-  const notable = items.some((it) => isFlagged(it) || it.action === "append" || it.action === "rejected");
-  items.forEach((it, i) => {
-    if (isFlagged(it) || it.action === "append" || it.action === "rejected" || it.action === "needs-decision" && !notable) {
-      for (let d = -2; d <= 2; d++) if (i + d >= 0 && i + d < items.length) show.add(i + d);
-    }
-  });
+  const near = (i) => { for (let d = -2; d <= 2; d++) if (i + d >= 0 && i + d < items.length) show.add(i + d); };
+  if (context) items.forEach((it, i) => { if (isNewFrame(it)) near(i); });
+  else {
+    const notable = items.some((it) => isFlagged(it) || it.action === "append" || it.action === "rejected");
+    items.forEach((it, i) => {
+      if (isFlagged(it) || it.action === "append" || it.action === "rejected" || it.action === "needs-decision" && !notable) near(i);
+    });
+  }
   if (!show.size) for (let i = 0; i < Math.min(8, items.length); i++) show.add(i);
   const out = [];
   let i = 0;
@@ -434,28 +449,42 @@ function computeVisibleItems(stripId, items) {
     while (j < items.length && !show.has(j)) j++;
     const key = `${i}-${j}`;
     if (expanded.has(key)) for (let k = i; k < j; k++) out.push({ type: "frame", item: items[k], index: k });
-    else out.push({ type: "ellipsis", count: j - i, key });
+    else out.push({ type: "ellipsis", count: j - i, key, nas: items.slice(i, j).every((it) => !isNewFrame(it)) });
     i = j;
   }
   return out;
 }
 
-function frameStrip(stripId, items) {
+function frameStrip(stripId, items, opts = {}) {
   if (!items.length) return null;
   const strip = el("div", { class: "frame-strip" }, []);
   computeVisibleItems(stripId, items).forEach((v) => {
-    if (v.type === "frame") strip.appendChild(frameCard(v.item, items, v.index));
+    if (v.type === "frame") strip.appendChild(frameCard(v.item, items, v.index, opts));
     else {
       strip.appendChild(el("div", {
         class: "frame-ellipsis",
-        onclick: () => {
+        title: "show them",
+        onclick: (e) => {
           (state.expandedGroups[stripId] = state.expandedGroups[stripId] || new Set()).add(v.key);
-          renderReview();
+          const anchor = e.target.closest("[data-anchor]");
+          keepInPlace(anchor && anchor.dataset.anchor, () => renderReview());
         },
-      }, [`⋯ ${v.count} more`]));
+      }, [`⋯ ${v.count} ${v.nas ? "on the NAS" : "more"}`]));
     }
   });
   return strip;
+}
+
+function keepInPlace(anchorId, rerender) {
+  // re-render without the page jumping: the block you clicked in stays where it was on screen
+  const find = () => (anchorId ? document.querySelector(`[data-anchor="${CSS.escape(anchorId)}"]`) : null);
+  const before = find();
+  const top = before ? before.getBoundingClientRect().top : null;
+  const y = window.scrollY;
+  rerender();
+  const after = find();
+  if (after && top !== null) window.scrollBy(0, after.getBoundingClientRect().top - top);
+  else window.scrollTo(window.scrollX, y);
 }
 
 function metricStrip(label, items, key) {
@@ -1660,7 +1689,7 @@ function renderReview() {
 
 async function answerDecision(d, value) {
   try {
-    answered(await api("POST", "/api/answers", { [d.id]: value }));
+    answered(await api("POST", "/api/answers", { [d.id]: value }), `dec-${d.id}`);
   } catch (e) {
     alert(`Couldn't save that answer: ${e.message || e}`);
   }
@@ -1723,6 +1752,7 @@ function renderDecisions(p) {
   card.style.display = p.decisions.length ? "block" : "none";
   const open = p.decisions.filter((d) => d.resolved === null).length;
   setStepBadge("decisions-badge", open ? "warn" : "ok", open ? `${open} open` : "all have answers or defaults");
+  const groupsById = Object.fromEntries(p.groups.map((g) => [g.id, g]));
   p.decisions.forEach((d) => {   // keep the planner's order: answering a decision doesn't move it
     const cls = d.answer !== null ? "answered" : d.resolved === null ? "" : "defaulted";
     const collapsed = state.collapsedDecisions.has(d.id);
@@ -1742,15 +1772,27 @@ function renderDecisions(p) {
         title: "forget this answer (back to the default, or open)",
       }, ["reset"]) : null,
     ]);
+    // an append or a replacement shows its frames among their neighbours already on the NAS (proposal L)
+    const g = groupsById[d.group];
+    const withContext = (d.kind === "append" || d.kind === "name-clash") && g;
+    const stripItems = withContext ? g.items.map((src) => state.itemsBySrc[src]).filter(Boolean) : files;
+    const sess = g && g.kind === "lights" ? p.sessions.find((x) => x.groups.includes(g.id) && (!x.exists || x.lights || x.flats || x.rejected)) : null;
+    const hasNas = stripItems.some((i) => !isNewFrame(i));
+    const note = [];
+    if (hasNas) note.push(`The ${files.length} new frame${files.length === 1 ? "" : "s"}, with 2 on either side that are already on the NAS (dimmed; their previews are read from the NAS).`);
+    if (sess) note.push(el("span", {}, ["Quality is reviewed with the session: ", el("a", {
+      href: "#", onclick: (e) => { e.preventDefault(); const t = document.querySelector(`[data-anchor="sess-${CSS.escape(sess.rel)}"]`); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" }); },
+    }, [`${sess.rel} ↓`])]));
     const body = collapsed
       ? [el("div", { class: "decision-question collapsed" }, [d.question])]
       : [
         el("div", { class: "decision-question" }, [d.question]),
         decisionChips(d),
-        frameStrip(`decision-${d.id}`, files),
+        frameStrip(`decision-${d.id}`, stripItems, { plain: true, focus: new Set(d.kind === "name-clash" ? d.items : []) }),
+        note.length ? el("div", { class: "decision-context" }, ["ⓘ ", ...note.flatMap((n, k) => (k ? [" ", n] : [n]))]) : null,
         files.length ? toggleList(`show ${files.length} file${files.length === 1 ? "" : "s"}`, files.map((i) => itemRow(i))) : null,
       ];
-    list.appendChild(el("div", { class: `decision ${cls}` }, [header, ...body]));
+    list.appendChild(el("div", { class: `decision ${cls}`, "data-anchor": `dec-${d.id}` }, [header, ...body]));
   });
 }
 
@@ -1764,7 +1806,7 @@ function renderSessions(p) {
   if (!active.length) list.appendChild(el("div", { class: "empty-hint" }, ["Nothing new to copy into any session."]));
   active.forEach((sess) => {
     const prefix = `${sess.rel}/`;
-    const block = el("div", { class: "night-block" }, []);
+    const block = el("div", { class: "night-block", "data-anchor": `sess-${sess.rel}` }, []);
     const badge = sess.new_target ? ["accent", "new target"] : sess.exists ? ["", "on the NAS: append"] : ["ok", "new session"];
     block.appendChild(el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap;" }, [
       el("span", { class: `badge ${badge[0]}` }, [badge[1]]),
@@ -1989,7 +2031,7 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- load ----------
 
-function applyPlan(plan) {
+function applyPlan(plan, keepScroll) {
   const y = window.scrollY;
   state.plan = plan;
   state.itemsBySrc = Object.fromEntries(plan.items.map((i) => [i.src, i]));
@@ -1998,7 +2040,7 @@ function applyPlan(plan) {
   renderStage();
   renderReview();
   renderStepper();
-  requestAnimationFrame(() => window.scrollTo(window.scrollX, y));
+  if (!keepScroll) requestAnimationFrame(() => window.scrollTo(window.scrollX, y));
 }
 
 async function loadHealth() {

@@ -114,6 +114,14 @@ so tell Chris.
     Verify results, σ and the checksums proving copies. **The session** (step, checkmarks, ticks, collapsed decisions)
     lives in `STATE_DIR/session.json`: any window or reload returns to it, and open windows follow each other.
 
+27. **UI review round 3 (2026-09-27).** Review: a decision card only asks its question; its frames are plain, shown
+    among neighbours already on the NAS (dimmed, previews read from the NAS) with a link to the session, where quality
+    (borders, Keep anyway / Reject) is reviewed, on new frames only. Strips open on the new frames ±2 and collapse the
+    rest ("⋯ N on the NAS"). Answers keep the clicked block in place. "Keep on the ASIAIR" everywhere (never "Leave");
+    "Very few frames" offers Keep on the ASIAIR / File as a session / Release for deletion. Clean up counts in files;
+    Mac metadata (`._x`, `.DS_Store`) goes with its partner, and a "not supported" reply is checked against the listing
+    (the ASIAIR removes them but reports an error).
+
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
 "the Astronomy share", in docs, UI, status names and code (`NasIndex`, `ASTRO_NAS`).
