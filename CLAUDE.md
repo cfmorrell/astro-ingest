@@ -18,11 +18,14 @@ so tell Chris.
    share one source of truth.
 
 ## Chris's decisions (planning session, 2026-09-25)
-5. Only the ASIAIR's **`EMMC Images`** share. The app **finds the ASIAIR on `192.168.1.0/24`** and talks SMB to it
-   directly (guest). `ASIAIR_ROOT` can point at a local directory instead (dev: `/astro-sandbox/_asiair-sample`).
+5. Only the ASIAIR's **`EMMC Images`** share. The app **finds the ASIAIR on the user's home network** and talks SMB to
+   it directly (guest). The network is detected (2026-09-27: never hard-code it): the browser's address (the app's
+   container only sees Docker's bridge), then the server's own networks, then recent devices; otherwise the page
+   asks. `ASIAIR_SUBNET` is only an override. `ASIAIR_ROOT` can point at a local directory instead (dev: `/astro-sandbox/_asiair-sample`).
    **Never rely on the `/asiair` host mount** to find or reach the device (`astro-ingest find` does discovery).
    - **Several devices on the network: Chris picks one.** The choice is remembered in `STATE_DIR/devices.json` by
-     **address + a name he gives it** (every ASIAIR reports the same identity: SMB server id spells "asiair",
+     **address + a name he gives it**, plus up to 10 **recent devices** (Connect, Rename, Forget) and a `slug` fixed at
+     first connect that names its staging folder and Verify results, so a rename moves nothing (every ASIAIR reports the same identity: SMB server id spells "asiair",
      NetBIOS "ASIAIR", MAC hidden), so each ASIAIR should have a DHCP reservation. If the remembered address stops
      answering and another device appears, **ask; never switch devices silently.**
    - **Seestar support comes later:** devices are recognized by share *and* top-level folders
@@ -103,6 +106,14 @@ so tell Chris.
     frame over Wi-Fi (staged copy, NAS copy, or the device's thumbnail). UI changes that need Chris's decision go on
     a lettered proposals page with mockups first (his standard).
 
+26. **UI review round 2 (2026-09-27).** Connect: recent devices, "Search the network" (disconnects: a new session;
+    never picks for you, even when there's one device), Advanced (one address, or another network). Review has no
+    clean-up preview; rejected frames stay staged until Copy. **Start over** (header, and beside OK after a
+    clean-up) clears staged-not-copied frames, previews, device-frame scores, Select/Review choices, **decision
+    answers by default** (a tick keeps them), the session and the connection; it keeps the NAS, logs, recent devices,
+    Verify results, σ and the checksums proving copies. **The session** (step, checkmarks, ticks, collapsed decisions)
+    lives in `STATE_DIR/session.json`: any window or reload returns to it, and open windows follow each other.
+
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
 "the Astronomy share", in docs, UI, status names and code (`NasIndex`, `ASTRO_NAS`).
@@ -120,7 +131,7 @@ We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ing
 Web port: container `8000` → host `8090`. Config comes from env vars (see `.env.example`; `dev/run-dev.sh` passes
 the repo's `.env`): `ASTRO_ROOT` (write target), `ASTRO_NAS` (old name `ASTRO_ARCHIVE` still accepted), `STATE_DIR`, `TZ`, `ASIAIR_ROOT`, `ASIAIR_SUBNET`,
 `ASIAIR_SHARE`, `ASIAIR_HOST`, `CACHE_DIR` (disposable renders; default `STATE_DIR/cache`), `STAGING_DIR`,
-`ASSUMED_WIFI_MB_S`, `ALLOW_DEVICE_DELETE`. **Never hard-code paths.** Python deps live in `/workspace/.venv`
+`ASSUMED_WIFI_MB_S`, `ALLOW_DEVICE_DELETE` (`ASIAIR_SUBNET` only overrides the detected network). **Never hard-code paths.** Python deps live in `/workspace/.venv`
 (`python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`); run tests with `.venv/bin/pytest`. The SMB clean-up test
 needs a throwaway SMB server from its own venv (`python3 -m venv .venv-smbtest && .venv-smbtest/bin/pip install
 impacket`); **never install impacket into `.venv`** (its `smbclient.py` script shadows the `smbclient` package).

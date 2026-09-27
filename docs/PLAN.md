@@ -241,6 +241,12 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    against the scan. Delete each `.fit` **and** its `_thn.jpg` plus orphan thumbnails, prune empty non-structural
    dirs, and log every delete. Test against a scratch copy (`/astro-sandbox/_asiair-scratch`) with LocalDirSource.
    Test SMB deletes against a throwaway Samba share before the real ASIAIR is ever touched.
+6a. **UI review with Chris (done 2026-09-27).** His screen-by-screen notes went through a lettered proposals page with
+   mockups (https://claude.ai/artifact/RoWP7YarUqbrodWycWEZqi), then were built: button system and pinned step bar,
+   one device pill, grouped Scan summary, Clean up regrouped with nothing pre-ticked and a staged delete, Quick check
+   (Thorough on request), Connect with network detection and recent devices, Start over, and a server-side session.
+   Bugs found on the way: previews read whole frames from the device (even left-out ones); quality charts missed two
+   of the six measures; renaming a device orphaned its staging folder and Verify results.
 6b. **Full-scale functional test, then a fine-detail review (Chris, 2026-09-25).** Once every step works end to
    end (Connect → Scan → Stage → Review → Copy & verify → Catalog → Clean up), run a full-size ingest of the sample and
    then go through the app screen by screen together for refinements: wording, layout, defaults, and anything that
