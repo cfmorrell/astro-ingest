@@ -228,3 +228,29 @@ def test_start_over_refuses_a_staging_dir_that_is_the_share(tmp_path):
         with pytest.raises(RuntimeError, match="refusing"):
             startover.run(dataclasses.replace(cfg, staging_dir=bad))
     assert (root / "Z95-ClaudeReferences" / "targets.csv").is_file()
+
+
+def test_start_over_never_deletes_the_last_copy_of_a_frame(tmp_path):
+    from astro_ingest import startover
+    client, air, root = make_app(tmp_path)
+    client.get("/api/plan")
+    job = client.post("/api/stage/run").json()["job_id"]
+    for _ in range(200):
+        if client.get(f"/jobs/{job}").json()["status"] in ("succeeded", "failed"):
+            break
+    cfg = Config.from_env({"ASTRO_ROOT": str(root), "ASTRO_NAS": str(tmp_path / "nas"), "STATE_DIR": str(root / "state"),
+                           "TZ": "America/New_York", "ASIAIR_ROOT": str(air)})
+    staged = sorted((tmp_path / "sandbox" / "_staging" / "local").rglob("*.fit"))
+    assert len(staged) == 4
+    gone = air / staged[0].relative_to(tmp_path / "sandbox" / "_staging" / "local")
+    gone.unlink()                                          # deleted from the device (e.g. released on Clean up)
+
+    pv = startover.preview(cfg)["staged"]
+    assert (pv["files"], pv["kept_gone"], pv["kept_unchecked"]) == (3, 1, 0)
+    unreachable = startover.staged_files(cfg, opener=lambda c, s: None)
+    assert len(unreachable["unchecked"]) == 4 and unreachable["unreachable"] == ["local"]
+
+    res = startover.run(cfg)
+    assert staged[0].is_file() and not any(p.is_file() for p in staged[1:])      # only the last copy stays
+    assert res["kept_staged"] == [f"local/{gone.relative_to(air).as_posix()}"]
+    assert "KEPT" in open(res["log"]).read()

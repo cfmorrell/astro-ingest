@@ -1982,13 +1982,16 @@ function renderStartOverBody() {
   go.disabled = false;
   const dev = pv.device ? (pv.device.nickname || pv.device.label) : null;
   const cleared = [
-    pv.staged.files ? `${pv.staged.files} staged frame${pv.staged.files === 1 ? "" : "s"} not yet copied (${gb(pv.staged.bytes)}); staging them again reads them over Wi-Fi${pv.staged.restage_s ? ` (about ${clock(pv.staged.restage_s)})` : ""}` : "Nothing is staged",
+    pv.staged.files ? `${pv.staged.files} staged frame${pv.staged.files === 1 ? "" : "s"} not yet copied (${gb(pv.staged.bytes)}), still on the ASIAIR; staging them again reads them over Wi-Fi${pv.staged.restage_s ? ` (about ${clock(pv.staged.restage_s)})` : ""}` : "Nothing staged to clear",
     `Previews and quality scores of the device's frames${pv.scores ? ` (${pv.scores} scored)` : ""}`,
     `What was left out on Select (${pv.left_out} frame${pv.left_out === 1 ? "" : "s"}) and kept or rejected on Review (${pv.kept_or_rejected} frame${pv.kept_or_rejected === 1 ? "" : "s"})`,
     keepAnswers ? null : `Decision answers (${pv.decision_answers}): target names, replace, keep or release`,
     `Progress through the steps${dev ? `, and the connection to ${dev}` : ""}`,
   ].filter(Boolean);
+  const st = pv.staged || {};
   const kept = [
+    st.kept_gone ? `${st.kept_gone} staged frame${st.kept_gone === 1 ? "" : "s"} no longer on the ASIAIR: the staged copy may be the last one` : null,
+    st.kept_unchecked ? `${st.kept_unchecked} staged frame${st.kept_unchecked === 1 ? "" : "s"} from ${(st.unreachable || []).join(", ") || "a device"}, which couldn't be reached to check` : null,
     "Everything on the NAS, its catalog, and the logs",
     keepAnswers ? `Decision answers (${pv.decision_answers})` : null,
     "Recent devices, Verify results, and the sensitivity (σ)",
