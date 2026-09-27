@@ -131,3 +131,19 @@ def test_path_guards():
     for bad in ("Plan/Light", "Autorun/Flat", "Autorun", "Autorun/Flat/sub"):
         with pytest.raises(DeleteRefused):
             check_removable_dir(bad)
+
+
+def test_verify_thorough_reads_everything(tmp_path):
+    cfg, air, root = make(tmp_path)
+    light = sorted((air / "Plan/Light/HeartNebula").glob("*.fit"))[0]
+    nas_copy = tmp_path / "nas" / HEART / "lights" / light.name
+    nas_copy.parent.mkdir(parents=True)
+    shutil.copy(light, nas_copy)
+    rel = light.relative_to(air).as_posix()
+    p = service.scan_and_plan(cfg, service.open_source(cfg))
+    with pytest.raises(ValueError):
+        cleanup.verify(cfg, p, method="fast")
+    res = cleanup.verify(cfg, p, method="thorough")
+    assert res["verified"] == 1 and res["bytes"] == light.stat().st_size
+    item = next(c for c in cleanup.preview(cfg, p).candidates if c.rel == rel)
+    assert item.group == "verified" and "thorough" in item.how and not item.nas[0][1].startswith("quick:")

@@ -27,7 +27,9 @@ so tell Chris.
      answering and another device appears, **ask; never switch devices silently.**
    - **Seestar support comes later:** devices are recognized by share *and* top-level folders
      (`sources/devices.py` KINDS), since the Seestar's share is also called "EMMC Images".
-6. Frames already ingested onto the NAS: checksum-compare with the NAS copy, then offer them for source cleanup. Never re-copy.
+6. Frames already ingested onto the NAS: compare with the NAS copy, then offer them for source cleanup. Never re-copy.
+   **Quick check by default** (2026-09-27): size + the first 16 KB (FITS header) + 8 slices of 64 KB, hashed on both
+   sides (`fsops.quick_digest`, ~0.5 MB per frame, ~1 min for 520 frames); **Thorough** reads every byte (BLAKE2b).
 7. Frames missing from an existing session on the NAS (e.g. subs Chris once dropped as poor quality): ask per batch,
    default **append** — but frame-quality screening (decision 17) still applies to them.
 8. `Live`, `Preview`, `Video`, `log`, `GuidingDarkLibrary` are ignored unless Chris asks for them. Never delete them.

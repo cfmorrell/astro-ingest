@@ -126,7 +126,7 @@ def print_plan(plan: P.Plan, out=sys.stdout) -> None:
             w("      options: " + " | ".join(o["value"] or "(none)" for o in d.options))
     w()
     w("CLEANUP PREVIEW (nothing is deleted in this phase)")
-    labels = {"after-verify": "deleted from the ASIAIR after checksum-verified copies + your approval",
+    labels = {"after-verify": "deleted from the ASIAIR once a check proves the NAS copy, when ticked",
               "callout": "offered for deletion, each called out", "blocked": "blocked until you decide",
               "pending": "waiting on a decision", "never": "never touched"}
     for key, v in sm["cleanup"].items():
@@ -370,7 +370,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
             last[0] = pct
 
     if args.verify:
-        print(cleanup.verify(cfg, planned, progress))
+        print(cleanup.verify(cfg, planned, progress, method="thorough" if args.thorough else "quick"))
     pv = cleanup.preview(cfg, planned)
     include = {"verified"} | set(filter(None, (args.include or "").split(",")))
     unknown = include - set(cleanup.GROUPS)
@@ -453,7 +453,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("cleanup", help="delete from the device what is verified on the NAS (and callouts you name)")
     p.add_argument("--source", help="override the source (a local folder, 'smb' or smb://host/share)")
-    p.add_argument("--verify", action="store_true", help="first checksum frames already on the NAS against the device")
+    p.add_argument("--verify", action="store_true", help="first check frames already on the NAS against the device "
+                   "(quick: size, header and 8 slices of each file)")
+    p.add_argument("--thorough", action="store_true", help="with --verify: read every byte and compare checksums")
     p.add_argument("--include", help="also delete these callout groups, e.g. rejected,left-out,over-cap,not-kept,other,orphan-thumb")
     p.add_argument("--yes", action="store_true", help="delete (default: only show what would be deleted)")
     p.set_defaults(func=cmd_cleanup)

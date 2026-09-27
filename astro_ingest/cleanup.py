@@ -38,8 +38,8 @@ RECENT_S = 15 * 60
 # groups are marked as such and ticked with one click.
 GROUPS = {
     "verified": ("On the NAS, checksum verified", True, True, ""),
-    "to-verify": ("On the NAS, not verified yet", False, False, "run Verify first: the device file is read once and "
-                  "compared with the NAS copy"),
+    "to-verify": ("On the NAS, not checked yet", False, False, "copied to the NAS before astro-ingest, so there's no "
+                  "checksum from the copy: a check compares each one with its NAS copy"),
     "differs": ("NAS copy differs", False, False, "same name and size, different content: not offered for deletion"),
     "not-copied": ("Not copied yet", False, False, "copy these first (Copy & verify)"),
     "rejected": ("Rejected for quality", True, False, "not on the NAS: deleting loses them"),
@@ -149,7 +149,9 @@ def preview(cfg: Config, planned) -> Preview:
             fresh = v and v["size"] == e.size and v["mtime"] == int(e.mtime)
             done = [x for x in copies.get(it.src, []) if x["size"] == e.size and x["blake2b"] == hashes.get(it.src)]
             if fresh and v["result"] == "match":
-                c.group, c.nas, c.how = "verified", [[v["nas_rel"], v["device_blake2b"]]], "checksum-verified against the NAS copy"
+                quick = v["device_blake2b"].startswith(fsops.QUICK_PREFIX)
+                c.group, c.nas = "verified", [[v["nas_rel"], v["device_blake2b"]]]
+                c.how = f"matches the NAS copy ({'quick check' if quick else 'thorough check'})"
             elif fresh:
                 c.group, c.how = "differs", f"{v['result']}: {v['nas_rel'] or 'no NAS copy found'}"
             elif done:
@@ -175,14 +177,22 @@ def _hash_stream(fh, on_bytes=None) -> tuple[str, int]:
     return h.hexdigest(), n
 
 
-def verify(cfg: Config, planned, progress: Callable[..., None] = lambda *a, **k: None) -> dict:
-    """Checksum-compare each already-ingested frame with its NAS copy. The device file is read once (unless its hash
-    is already known from staging); results are kept per device path, size and mtime. Stops at a read error."""
+VERIFY_METHODS = ("quick", "thorough")
+
+
+def verify(cfg: Config, planned, progress: Callable[..., None] = lambda *a, **k: None, method: str = "quick") -> dict:
+    """Compare each already-ingested frame with its NAS copy (decision 6). `quick` (the default) reads the size, the
+    FITS header and 8 slices of each file on both sides (fsops.quick_digest); `thorough` reads every byte and compares
+    BLAKE2b checksums. A frame whose full hash is already known from staging is compared in full either way. Results
+    are kept per device path, size and mtime. Stops at a read error."""
+    if method not in VERIFY_METHODS:
+        raise ValueError(f"unknown check {method!r}")
     pv = preview(cfg, planned)
     todo = [c for c in pv.candidates if c.group == "to-verify"]
     items = {i.src: i for i in planned.plan.items}
     known = _device_hashes(cfg, planned)
-    total = sum(c.size for c in todo if c.rel not in known)
+    per_file = lambda size: size if method == "thorough" else sum(n for _, n in fsops.quick_offsets(size))  # noqa: E731
+    total = sum(per_file(c.size) for c in todo if c.rel not in known)
     started, done_bytes = time.monotonic(), 0
     counts = Counter()
 
@@ -201,7 +211,10 @@ def verify(cfg: Config, planned, progress: Callable[..., None] = lambda *a, **k:
         if dev is None:
             try:
                 with planned.source.open_read(c.rel) as fh:
-                    dev, got = _hash_stream(fh, on_bytes)
+                    if method == "thorough":
+                        dev, got = _hash_stream(fh, on_bytes)
+                    else:
+                        dev, got = fsops.quick_digest(fh, c.size, on_bytes), c.size
             except OSError as e:
                 counts["read-error"] += 1
                 return {"verified": counts["match"], "mismatch": counts["mismatch"], "nas_missing": counts["nas-missing"],
@@ -216,7 +229,7 @@ def verify(cfg: Config, planned, progress: Callable[..., None] = lambda *a, **k:
             if p is None:
                 continue
             nas_rel = cand
-            if fsops.hash_file(p) == dev:
+            if fsops.digest_matches(p, dev):
                 result = "match"
                 break
             result = "mismatch"
@@ -337,7 +350,7 @@ def _one(cfg: Config, source, o: dict, before: dict, frame_ok: dict) -> tuple[st
         return "skipped", f"changed on the device since the scan ({now[0]} bytes, mtime {int(now[1])})"
     for nas_rel, digest in o["nas"]:
         p = fsops.nas_path(cfg, nas_rel)
-        if p is None or fsops.hash_file(p) != digest:
+        if p is None or not fsops.digest_matches(p, digest):
             frame_ok[rel] = False
             return "skipped", f"NAS copy {nas_rel} is {'missing' if p is None else 'different now'}"
     if o["kind"] != "thumb" and o["group"] == "verified" and not o["nas"]:

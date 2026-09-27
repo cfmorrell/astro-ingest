@@ -94,6 +94,51 @@ def hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
+# Quick check (Chris, 2026-09-27: "Option 2 with option 1 as a Thorough choice"): the size, the first 16 KB (the FITS
+# header: capture time, exposure, gain, temperature) and 8 slices of 64 KB spread through the image, hashed together.
+# About 0.5 MB read per frame instead of all of it, on the device's Wi-Fi and on the NAS alike. Stored as "quick:<hex>"
+# so it can never be mistaken for a full BLAKE2b.
+QUICK_HEAD = 16 << 10
+QUICK_SLICE = 64 << 10
+QUICK_SLICES = 8
+QUICK_PREFIX = "quick:"
+
+
+def quick_offsets(size: int) -> list[tuple[int, int]]:
+    """(offset, length) of every piece the quick check reads, for a file of `size` bytes."""
+    if size <= QUICK_HEAD + QUICK_SLICES * QUICK_SLICE:
+        return [(0, size)]
+    span = size - QUICK_HEAD - QUICK_SLICE
+    return [(0, QUICK_HEAD)] + [(QUICK_HEAD + span * i // (QUICK_SLICES - 1), QUICK_SLICE) for i in range(QUICK_SLICES)]
+
+
+def quick_digest(fh, size: int, on_bytes=None) -> str:
+    """The quick-check digest of an open (seekable) file of `size` bytes."""
+    h = hashlib.blake2b()
+    h.update(str(size).encode() + b"\0")
+    for off, n in quick_offsets(size):
+        fh.seek(off)
+        data = fh.read(n)
+        if len(data) != n:
+            raise OSError(f"short read at {off}: {len(data)} of {n} bytes")
+        h.update(data)
+        if on_bytes:
+            on_bytes(n)
+    return QUICK_PREFIX + h.hexdigest()
+
+
+def digest_matches(path: Path, digest: str) -> bool:
+    """Does the file at `path` have this digest (a full BLAKE2b, or a quick-check digest)?"""
+    if digest.startswith(QUICK_PREFIX):
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            try:
+                return quick_digest(f, size) == digest
+            except OSError:
+                return False
+    return hash_file(path) == digest
+
+
 def nas_path(cfg: Config, rel: str) -> Path | None:
     """Where a NAS file is (dev: the sandbox first, then the read-only live share), or None. Never a symlink."""
     for root in (Path(cfg.astro_root), Path(cfg.astro_nas)):

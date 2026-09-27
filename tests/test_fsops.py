@@ -133,3 +133,28 @@ def test_catalog_writers(cfg):
     assert fsops.remove_link(cfg, "103-ByDate/real-folder") == "skipped"      # only symlinks are ever removed
     assert fsops.remove_link(cfg, "103-ByDate/2026-09-23-T-2600MC-Z61") == "removed"
     assert (cfg.astro_root / s / "PROJECT_INFO.txt").is_file()               # the session itself is untouched
+
+
+def test_quick_digest_reads_header_and_slices_only(tmp_path):
+    import io
+    size = 50 * (1 << 20)                                               # a full-size 2600MC frame is ~52 MB
+    offs = fsops.quick_offsets(size)
+    assert offs[0] == (0, fsops.QUICK_HEAD) and len(offs) == 1 + fsops.QUICK_SLICES
+    assert offs[-1] == (size - fsops.QUICK_SLICE, fsops.QUICK_SLICE)   # the very end is always read (truncation)
+    assert sum(n for _, n in offs) < 600 << 10
+    assert fsops.quick_offsets(1000) == [(0, 1000)]                     # small files: read whole
+
+    data = bytearray(os.urandom(3 << 20))
+    a = tmp_path / "a.fit"
+    a.write_bytes(data)
+    read = []
+    d = fsops.quick_digest(io.BytesIO(bytes(data)), len(data), read.append)
+    assert d.startswith(fsops.QUICK_PREFIX) and sum(read) < len(data) and fsops.digest_matches(a, d)
+    a.write_bytes(data[:-1])                                            # truncated NAS copy
+    assert not fsops.digest_matches(a, d)
+    other = bytearray(data)
+    other[100] ^= 1                                                     # a different frame (header differs)
+    a.write_bytes(other)
+    assert not fsops.digest_matches(a, d)
+    a.write_bytes(data)
+    assert fsops.digest_matches(a, fsops.hash_file(a))                  # full BLAKE2b digests still work

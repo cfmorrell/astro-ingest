@@ -265,13 +265,15 @@ def create_app(cfg: Config) -> FastAPI:
             "unfinished": db.unfinished_cleanup(cfg), "last": last[0] if last else None}
 
     @app.post("/api/cleanup/verify")
-    def cleanup_verify():
+    def cleanup_verify(method: str = Body("quick", embed=True)):
         if busy():
             raise HTTPException(409, f"a {busy()} run is in progress")
+        if method not in cleanup.VERIFY_METHODS:
+            raise HTTPException(400, f"method must be one of {cleanup.VERIFY_METHODS}")
         p = planned()
 
         def work(progress) -> dict:
-            result = cleanup.verify(cfg, p, progress)
+            result = cleanup.verify(cfg, p, progress, method=method) | {"method": method}
             replan()
             return result
 
