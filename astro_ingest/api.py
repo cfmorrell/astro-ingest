@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import re
 import threading
+import time
 from pathlib import Path, PurePosixPath
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -25,6 +27,7 @@ from astro_ingest.core import imaging
 STATIC_DIR = Path(__file__).parent / "static"
 PREVIEW_SIZES = (analysis.THUMB_SIZE, analysis.FULL_SIZE)
 FRAME_KINDS = ("Light", "Flat", "Dark", "Bias", "DarkFlat")
+SESSION_FILE = "session.json"   # the page's place in the flow (step, finished steps, ticks), shared by every window
 LOG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.log")   # a plain file name in STATE_DIR/logs (no paths)
 
 
@@ -448,6 +451,22 @@ def create_app(cfg: Config) -> FastAPI:
         if job is None:
             raise HTTPException(404, "unknown job")
         return job.log_path.read_text() if job.log_path.exists() else ""
+
+    # ---------------- the session (proposal K): where the flow is, kept on the server so any window picks it up
+
+    session_path = Path(cfg.state_dir) / SESSION_FILE
+
+    @app.get("/api/session")
+    def get_session():
+        return state.read_json(session_path, {})
+
+    @app.put("/api/session")
+    def put_session(request: Request, data: dict = Body(...), client: str = Body("")):
+        if len(json.dumps(data)) > 4 << 20:
+            raise HTTPException(413, "session too large")
+        record = {"data": data, "client": client, "updated_at": time.time()}
+        state.write_json(cfg, session_path, record)
+        return {"updated_at": record["updated_at"]}
 
     # ---------------- logs (linked from the results of Copy & verify, Catalog and Clean up)
 

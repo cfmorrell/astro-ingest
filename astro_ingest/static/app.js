@@ -35,6 +35,10 @@ const state = {
   collapsedDecisions: new Set(),  // decision ids collapsed (this page view)
   passed: new Set(),     // steps finished in this page view: only these get a green check (Chris, 2026-09-27)
   sigmaLive: null,       // σ while the slider is being dragged (flags previewed locally until it's released)
+  sessionReady: false,   // the session has been loaded from the server (don't save over it before that)
+  sessionSaved: "",      // the last session saved or seen, as JSON
+  sessionSeen: 0,        // updated_at of the newest session this window has seen
+  watched: new Set(),    // job ids this window is following
   copyPreview: null,     // /api/copy/preview: what approving now would copy
   lastBatch: null,       // the most recent copy batch
   catalogPreview: null,  // /api/catalog/preview: what the Catalog step would write
@@ -50,6 +54,76 @@ const state = {
   expandedGroups: {},    // strip id -> Set of "start-end" collapsed ranges the user expanded
   chartsOpen: new Set(), // light group ids whose quality charts are shown
 };
+
+// ---------- the session (proposal K): kept on the server, so any window, reload or reconnect returns here ----------
+
+const CLIENT_ID = Math.random().toString(36).slice(2);   // this window, so it can ignore its own saves
+let sessionTimer = null;
+
+function sessionData() {
+  return {
+    step: state.activeStep,
+    passed: [...state.passed],
+    cleanTicked: [...state.cleanTicked],
+    collapsed: [...state.collapsedDecisions],
+    cleanDone: state.cleanDone,
+  };
+}
+
+function applySession(rec) {
+  const d = (rec && rec.data) || {};
+  state.passed = new Set(d.passed || []);
+  state.cleanTicked = new Set(d.cleanTicked || []);
+  state.collapsedDecisions = new Set(d.collapsed || []);
+  state.cleanDone = d.cleanDone || null;
+  if (d.step && STEPS.includes(d.step)) state.activeStep = d.step;
+  state.sessionSaved = JSON.stringify(sessionData());
+  state.sessionSeen = (rec && rec.updated_at) || 0;
+}
+
+function persistSession() {
+  // saves only what changed, shortly after it changes
+  if (!state.sessionReady) return;
+  const json = JSON.stringify(sessionData());
+  if (json === state.sessionSaved) return;
+  state.sessionSaved = json;
+  clearTimeout(sessionTimer);
+  sessionTimer = setTimeout(async () => {
+    try {
+      const r = await api("PUT", "/api/session", { data: JSON.parse(json), client: CLIENT_ID });
+      state.sessionSeen = Math.max(state.sessionSeen, r.updated_at);
+    } catch (e) { /* the next change tries again */ }
+  }, 300);
+}
+
+async function followOtherWindows() {
+  // another window moved on: follow it (and pick up any job it started)
+  try {
+    const rec = await api("GET", "/api/session");
+    if (rec.updated_at && rec.updated_at > state.sessionSeen && rec.client !== CLIENT_ID) {
+      applySession(rec);
+      await loadPlan(false);
+      if (state.plan) renderDecisions(state.plan);
+      if (state.activeStep === "clean" && state.cleanPreview) { renderCleanStep(); renderCleanResult(state.cleanDone); }
+    }
+    resumeRunningJob(true);
+  } catch (e) { /* offline for a moment */ }
+}
+
+async function watchDevice() {
+  // the pill turns red if the device drops off Wi-Fi mid-way (and back to green when it returns)
+  try {
+    const h = await api("GET", "/health");
+    const changed = !state.health || h.source_online !== state.health.source_online;
+    state.health = h;
+    document.getElementById("app-banner").style.display = "none";
+    if (changed) { renderDevicePill(); renderConnect(); renderStepBar(); }
+  } catch (e) {
+    const banner = document.getElementById("app-banner");
+    banner.textContent = "✕ Can't reach the astro-ingest server. Check that it's running; this page reconnects on its own.";
+    banner.style.display = "flex";
+  }
+}
 
 // ---------- tiny fetch helpers (same shapes as astro-stacker) ----------
 
@@ -476,6 +550,7 @@ function stepDone(step) {
 
 function renderStepBar() {
   // Proposal A: the step's status on the left; Next (or Clean up's Delete) always in the same place
+  persistSession();
   const step = state.activeStep;
   const status = document.getElementById("stepbar-status");
   const why = document.getElementById("stepbar-why");
@@ -1399,7 +1474,7 @@ function renderCleanResult(res) {
   box.innerHTML = "";
   if (!res) return;
   const dev = state.cleanPreview ? deviceName(state.cleanPreview) : "the device";
-  const ok = el("button", { class: "small", onclick: () => { state.cleanDone = null; renderCleanResult(null); } }, ["OK"]);
+  const ok = el("button", { class: "small", onclick: () => { state.cleanDone = null; renderCleanResult(null); persistSession(); } }, ["OK"]);
   if (res.stopped) {
     box.appendChild(el("div", { class: "done-panel stopped" }, [el("div", { class: "h" }, ["Nothing deleted"]), el("div", {}, [res.stopped]), el("div", {}, [ok])]));
     return;
@@ -1601,6 +1676,7 @@ function renderDecisions(p) {
     const toggle = () => {
       if (collapsed) state.collapsedDecisions.delete(d.id); else state.collapsedDecisions.add(d.id);
       renderDecisions(state.plan);
+      persistSession();
     };
     const header = el("div", { class: "decision-header", onclick: toggle, title: collapsed ? "expand" : "collapse" }, [
       el("span", { class: "decision-chevron" }, [collapsed ? "▸" : "▾"]),
@@ -1699,6 +1775,15 @@ function renderLibrary(p) {
 // ---------- jobs (astro-stacker's pollJob shape) ----------
 
 async function pollJob(jobId, progressEl, onDone, onTick) {
+  state.watched.add(jobId);
+  try {
+    await pollJobInner(jobId, progressEl, onDone, onTick);
+  } finally {
+    state.watched.delete(jobId);
+  }
+}
+
+async function pollJobInner(jobId, progressEl, onDone, onTick) {
   const fill = progressEl.querySelector(".progress-fill");
   const pct = progressEl.querySelector(".pct");
   const msg = progressEl.querySelector(".msg");
@@ -1737,19 +1822,21 @@ async function runQuality() {
   }
 }
 
-async function resumeRunningJob() {
-  // Picks up a scoring job started earlier or from another tab (astro-stacker's active-jobs idea)
+async function resumeRunningJob(quiet) {
+  // Picks up a job started earlier or from another window (astro-stacker's active-jobs idea). `quiet`: don't
+  // switch steps (used by the background poll).
   try {
-    const jobsNow = (await api("GET", "/jobs")).jobs;
-    const stage = jobsNow.find((j) => j.kind === "stage" && j.status === "running");
-    if (stage) { state.activeStep = "stage"; showActiveStep(); await watchStageJob(stage.id); }
-    const copying = jobsNow.find((j) => j.kind === "copy" && j.status === "running");
-    if (copying) { state.activeStep = "copy"; showActiveStep(); await watchCopyJob(copying.id); }
-    const cleaning = jobsNow.find((j) => (j.kind === "cleanup" || j.kind === "verify") && j.status === "running");
-    if (cleaning) { state.activeStep = "clean"; showActiveStep(); await watchCleanJob(cleaning.id, cleaning.kind); }
-    const cataloguing = jobsNow.find((j) => j.kind === "catalog" && j.status === "running");
-    if (cataloguing) { state.activeStep = "catalog"; showActiveStep(); await watchCatalogJob(cataloguing.id); }
-    const running = jobsNow.find((j) => j.kind === "quality" && j.status === "running");
+    const jobsNow = (await api("GET", "/jobs")).jobs.filter((j) => j.status === "running" && !state.watched.has(j.id));
+    const go = (step) => { if (!quiet) { state.activeStep = step; showActiveStep(); } };
+    const stage = jobsNow.find((j) => j.kind === "stage");
+    if (stage) { go("stage"); await watchStageJob(stage.id); }
+    const copying = jobsNow.find((j) => j.kind === "copy");
+    if (copying) { go("copy"); await watchCopyJob(copying.id); }
+    const cleaning = jobsNow.find((j) => j.kind === "cleanup" || j.kind === "verify");
+    if (cleaning) { go("clean"); await watchCleanJob(cleaning.id, cleaning.kind); }
+    const cataloguing = jobsNow.find((j) => j.kind === "catalog");
+    if (cataloguing) { go("catalog"); await watchCatalogJob(cataloguing.id); }
+    const running = jobsNow.find((j) => j.kind === "quality");
     if (running) await watchQualityJob(running.id);
   } catch (e) { /* ignore */ }
 }
@@ -1864,6 +1951,14 @@ document.getElementById("quality-sigma").addEventListener("change", async (e) =>
 (async function init() {
   showActiveStep();
   await loadHealth();
+  try { applySession(await api("GET", "/api/session")); } catch (e) { /* no session yet */ }
+  const want = state.activeStep;
   await loadPlan(false);
+  // back to where this session was, if that step can be shown now; otherwise Connect
+  state.activeStep = stepStatus(want).available ? want : "connect";
+  state.sessionReady = true;
+  showActiveStep();
   resumeRunningJob();
+  setInterval(followOtherWindows, 4000);
+  setInterval(watchDevice, 15000);
 })();
