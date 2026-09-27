@@ -230,6 +230,13 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    groups untouched; `_asiair-sample` and the share unchanged apart from the app's own state/log files. SMB deletes
    tested against a throwaway impacket server (`tests/test_smb_cleanup.py`). `ALLOW_DEVICE_DELETE=1` required for a
    real device.
+   **First real-device run, end to end (2026-09-26, after Chris's backups):** DracoTrio 06-19 only (every other
+   set left out on Select, answers restored after). Stage read 82 frames (4.3 GB) at 9.05 MB/s; Review: 65 to copy,
+   17 rejected for quality (0001–0007 dusk at 342°, 0044–0045, 0065–0072 running into Chris's own dawn marks
+   0073–0082, which were left out and never read); Copy & verify 65 files, all `b2sum`-OK; Catalog wrote
+   PROJECT_INFO, the targets.csv row (old file retired), 2 links, ZZ_TARGET_INDEX.md; Clean up deleted exactly the
+   92 frames + 92 thumbnails (copied, rejected, left out) from the ASIAIR over SMB, device listing 2312 → 2128 with
+   no other change. Everything else stays on the device for the 6b acceptance run.
    Original plan: only verified, approved, gate-passed items. Before deleting, re-check source size and mtime
    against the scan. Delete each `.fit` **and** its `_thn.jpg` plus orphan thumbnails, prune empty non-structural
    dirs, and log every delete. Test against a scratch copy (`/astro-sandbox/_asiair-scratch`) with LocalDirSource.
