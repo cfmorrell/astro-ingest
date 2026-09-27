@@ -47,7 +47,8 @@ so tell Chris.
 12. **UI consistency with [astro-stacker](https://github.com/cfmorrell/astro-stacker)**; the apps may merge one day.
     Mirror its stack: plain `static/index.html` + `app.js` + `styles.css` (its CSS as the base), no build step or
     framework, FastAPI JSON API with `StaticFiles` mounted last, stacker-shaped `/jobs` API, and `config.VERSION`
-    shown via `/health`, staying under 1.0.
+    shown via `/health`, staying under 1.0: **bump the minor version (0.2, 0.3, …) with each release** and tag it
+    (`v0.2`), which also publishes a `v0.2` image.
 
 13. **Ask whenever the target is unclear** (several candidates or none); a unique catalog/name match or frames already
     on the NAS decide it. No special cases for particular scopes.
