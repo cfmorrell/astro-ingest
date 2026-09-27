@@ -203,6 +203,13 @@ def copied_frames(cfg: Config, source_label: str) -> dict[str, list[dict]]:
     return out
 
 
+def copied_hashes(cfg: Config) -> set[str]:
+    """The BLAKE2b of every frame copied and verified onto the NAS, from any source."""
+    with connect(cfg) as con:
+        return {r["blake2b"] for r in con.execute(
+            "SELECT blake2b FROM operations WHERE kind = 'copy' AND status IN ('done', 'already-there')") if r["blake2b"]}
+
+
 # ---------------------------------------------------------------- clean-up runs
 
 def create_cleanup(cfg: Config, cleanup_id: str, source: str, ops: list[dict], summary: dict) -> None:

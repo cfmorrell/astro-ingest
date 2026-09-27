@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from astro_ingest import analysis, batch, catalog, cleanup, db, jobs, service, staging, state
+from astro_ingest import analysis, batch, catalog, cleanup, db, jobs, service, staging, startover, state
 from astro_ingest.sources import devices, discover, network
 from astro_ingest.config import VERSION, Config
 from astro_ingest.core import imaging
@@ -27,7 +27,7 @@ from astro_ingest.core import imaging
 STATIC_DIR = Path(__file__).parent / "static"
 PREVIEW_SIZES = (analysis.THUMB_SIZE, analysis.FULL_SIZE)
 FRAME_KINDS = ("Light", "Flat", "Dark", "Bias", "DarkFlat")
-SESSION_FILE = "session.json"   # the page's place in the flow (step, finished steps, ticks), shared by every window
+SESSION_FILE = startover.SESSION_FILE   # the page's place in the flow (step, finished steps, ticks), shared by every window
 LOG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.log")   # a plain file name in STATE_DIR/logs (no paths)
 
 
@@ -467,6 +467,25 @@ def create_app(cfg: Config) -> FastAPI:
         record = {"data": data, "client": client, "updated_at": time.time()}
         state.write_json(cfg, session_path, record)
         return {"updated_at": record["updated_at"]}
+
+    # ---------------- start over (proposal J)
+
+    @app.get("/api/start-over")
+    def start_over_preview():
+        return startover.preview(cfg) | {"busy": busy()}
+
+    @app.post("/api/start-over")
+    def start_over(forget_answers: bool = Body(True, embed=True)):
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress: wait for it to finish")
+        try:
+            result = startover.run(cfg, forget_answers)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e)) from e
+        with lock:
+            cache.pop("plan", None)
+        found.pop("devices", None)
+        return result
 
     # ---------------- logs (linked from the results of Copy & verify, Catalog and Clean up)
 

@@ -10,6 +10,7 @@
 <header class="topbar">
   <div><a href="#" id="brand-link" class="brand">astro-ingest</a><span id="app-version" class="version-badge"></span><span class="brand-sub">pull · file · clean</span></div>
   <div style="display:flex; gap:8px; align-items:center;">
+    <button id="start-over-btn" class="small" title="Clear this run and go back to Connect">Start over</button>
     <span id="device-pill" class="pill" title=""><span class="dot"></span><span class="pill-text">Checking…</span></span>
   </div>
 </header>
@@ -228,6 +229,19 @@
     <label class="lightbox-exclude-row" id="lightbox-exclude-row" style="display:none;">
       <input type="checkbox" id="lightbox-exclude" /> Don't ingest this frame
     </label>
+  </div>
+</div>
+
+<!-- Start over confirmation (proposal J): what's cleared and what's kept -->
+<div class="modal-overlay" id="start-over-modal" style="display:none;">
+  <div class="card modal" role="dialog" aria-modal="true" aria-labelledby="so-title">
+    <div class="card-title" id="so-title" style="font-size:15px;">Start over?</div>
+    <div id="so-body"></div>
+    <label class="so-keep"><input type="checkbox" id="so-keep-answers" /> Keep decision answers (target names, replace, keep or release)</label>
+    <div class="modal-actions">
+      <button id="so-cancel">Cancel</button>
+      <button id="so-go" class="danger armed">Start over</button>
+    </div>
   </div>
 </div>
 

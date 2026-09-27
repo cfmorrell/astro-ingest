@@ -180,3 +180,51 @@ def test_log_files_are_served_by_name_only(tmp_path):
     assert client.get("/api/logs/jobs/abc123.log").text == "=== job ===\n"
     for bad in ("/api/logs/..%2Fanswers.json", "/api/logs/answers.json", "/api/logs/nothing-here.log"):
         assert client.get(bad).status_code == 404, bad
+
+
+def test_start_over(tmp_path):
+    import json
+
+    client, air, root = make_app(tmp_path)
+    state_dir = root / "state"
+    client.get("/api/plan")
+    stage = client.post("/api/stage/run").json()
+    for _ in range(200):
+        if client.get(f"/jobs/{stage['job_id']}").json()["status"] in ("succeeded", "failed"):
+            break
+    staging = tmp_path / "sandbox" / "_staging"
+    assert any(staging.rglob("*.fit"))
+    (state_dir / "cache" / "previews").mkdir(parents=True, exist_ok=True)
+    (state_dir / "cache" / "previews" / "x.png").write_bytes(b"png")
+    frame = next(p.relative_to(air).as_posix() for p in air.rglob("*.fit"))
+    client.post("/api/answers", json={f"exclude:{frame}": "1", "quality-sigma": "5"})
+    client.put("/api/session", json={"data": {"step": "review", "passed": ["connect", "scan"]}, "client": "w1"})
+    (state_dir / "answers.json").write_text(json.dumps(json.loads((state_dir / "answers.json").read_text()) | {"target-x": "skip"}))
+
+    pv = client.get("/api/start-over").json()
+    assert pv["staged"]["files"] >= 1 and pv["left_out"] == 1 and pv["decision_answers"] == 1 and not pv["blocked"]
+    res = client.post("/api/start-over", json={"forget_answers": False}).json()
+    answers = json.loads((state_dir / "answers.json").read_text())
+    assert answers == {"quality-sigma": "5", "target-x": "skip"}               # choices gone; σ and answers kept
+    assert not any(staging.rglob("*.fit")) and not (state_dir / "cache" / "previews").exists()
+    assert client.get("/api/session").json()["data"] == {}
+    assert (tmp_path / "sandbox" / "Z95-ClaudeReferences" / "targets.csv").is_file()   # the share is untouched
+    assert res["log"].endswith(".log")
+
+    client.post("/api/start-over", json={})                                     # default: answers cleared too
+    assert json.loads((state_dir / "answers.json").read_text()) == {"quality-sigma": "5"}
+
+
+def test_start_over_refuses_a_staging_dir_that_is_the_share(tmp_path):
+    import dataclasses
+
+    import pytest
+
+    from astro_ingest import startover
+    client, air, root = make_app(tmp_path)
+    cfg = Config.from_env({"ASTRO_ROOT": str(root), "ASTRO_NAS": str(tmp_path / "nas"), "STATE_DIR": str(root / "state"),
+                           "TZ": "America/New_York", "ASIAIR_ROOT": str(air)})
+    for bad in (root, root.parent, root / "state"):
+        with pytest.raises(RuntimeError, match="refusing"):
+            startover.run(dataclasses.replace(cfg, staging_dir=bad))
+    assert (root / "Z95-ClaudeReferences" / "targets.csv").is_file()

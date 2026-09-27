@@ -1673,3 +1673,33 @@ input[type="range"] { accent-color: var(--accent); }
 details > summary.toggle-adv { list-style: none; }
 details > summary.toggle-adv::-webkit-details-marker { display: none; }
 .device-row { border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; background: var(--panel-2); margin-bottom: 8px; }
+
+/* Start over confirmation (proposal J) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(5, 6, 10, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.modal {
+  max-width: 560px;
+  width: 100%;
+  margin: 0;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  border-color: var(--border-strong);
+  display: grid;
+  gap: 10px;
+}
+
+.modal h4 { margin: 4px 0 2px; font-size: 12.5px; }
+.modal h4.cleared { color: var(--warn); }
+.modal h4.kept { color: var(--success); }
+.modal ul { margin: 0; padding-left: 20px; font-size: 13px; display: grid; gap: 3px; }
+.so-keep { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.so-keep input { accent-color: var(--accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }

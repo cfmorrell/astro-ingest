@@ -551,6 +551,10 @@ function stepDone(step) {
 function renderStepBar() {
   // Proposal A: the step's status on the left; Next (or Clean up's Delete) always in the same place
   persistSession();
+  const running = state.stageRunning || state.copyRunning || state.catalogRunning || state.cleanRunning;
+  const so = document.getElementById("start-over-btn");
+  so.disabled = !!running;
+  so.title = running ? "Wait for the running job to finish" : "Clear this run and go back to Connect";
   const step = state.activeStep;
   const status = document.getElementById("stepbar-status");
   const why = document.getElementById("stepbar-why");
@@ -1505,7 +1509,8 @@ function renderCleanResult(res) {
   rows("Missing but not deleted by this run", res.unexpected_missing);
   rows("Still on the device after deleting", res.still_there);
   rows("Kept (a check didn't pass)", res.skipped);
-  panel.appendChild(el("div", { style: "display:flex; gap:12px; align-items:center;" }, ["Log: ", logLink(res.log), ok]));
+  panel.appendChild(el("div", { style: "display:flex; gap:12px; align-items:center;" }, ["Log: ", logLink(res.log), ok,
+    el("button", { class: "small", onclick: openStartOver }, ["Start over"])]));
   box.appendChild(panel);
 }
 
@@ -1840,6 +1845,98 @@ async function resumeRunningJob(quiet) {
     if (running) await watchQualityJob(running.id);
   } catch (e) { /* ignore */ }
 }
+
+// ---------- start over (proposal J) ----------
+
+let startOverPreview = null;
+
+function renderStartOverBody() {
+  const pv = startOverPreview;
+  const body = document.getElementById("so-body");
+  body.innerHTML = "";
+  if (!pv) { body.appendChild(el("div", { class: "hint" }, ["Loading…"])); return; }
+  const keepAnswers = document.getElementById("so-keep-answers").checked;
+  const go = document.getElementById("so-go");
+  if (pv.busy || pv.blocked) {
+    body.appendChild(el("div", { class: "session-mismatch-warning" }, [`⚠ Not now: ${pv.busy ? `a ${pv.busy} run is in progress; wait for it to finish` : pv.blocked}.`]));
+    go.disabled = true;
+    return;
+  }
+  go.disabled = false;
+  const dev = pv.device ? (pv.device.nickname || pv.device.label) : null;
+  const cleared = [
+    pv.staged.files ? `${pv.staged.files} staged frame${pv.staged.files === 1 ? "" : "s"} not yet copied (${gb(pv.staged.bytes)}); staging them again reads them over Wi-Fi${pv.staged.restage_s ? ` (about ${clock(pv.staged.restage_s)})` : ""}` : "Nothing is staged",
+    `Previews and quality scores of the device's frames${pv.scores ? ` (${pv.scores} scored)` : ""}`,
+    `What was left out on Select (${pv.left_out} frame${pv.left_out === 1 ? "" : "s"}) and kept or rejected on Review (${pv.kept_or_rejected} frame${pv.kept_or_rejected === 1 ? "" : "s"})`,
+    keepAnswers ? null : `Decision answers (${pv.decision_answers}): target names, replace, keep or release`,
+    `Progress through the steps${dev ? `, and the connection to ${dev}` : ""}`,
+  ].filter(Boolean);
+  const kept = [
+    "Everything on the NAS, its catalog, and the logs",
+    keepAnswers ? `Decision answers (${pv.decision_answers})` : null,
+    "Recent devices, Verify results, and the sensitivity (σ)",
+    "Nothing is deleted from the ASIAIR",
+  ].filter(Boolean);
+  body.appendChild(el("h4", { class: "cleared" }, ["Cleared"]));
+  body.appendChild(el("ul", {}, cleared.map((t) => el("li", {}, [t]))));
+  body.appendChild(el("h4", { class: "kept" }, ["Kept"]));
+  body.appendChild(el("ul", {}, kept.map((t) => el("li", {}, [t]))));
+}
+
+async function openStartOver() {
+  startOverPreview = null;
+  document.getElementById("so-keep-answers").checked = false;   // answers are cleared by default (Chris)
+  document.getElementById("start-over-modal").style.display = "flex";
+  renderStartOverBody();
+  try {
+    startOverPreview = await api("GET", "/api/start-over");
+  } catch (e) {
+    startOverPreview = { blocked: String(e.message || e), staged: {} };
+  }
+  renderStartOverBody();
+  document.getElementById("so-cancel").focus();
+}
+
+function closeStartOver() {
+  document.getElementById("start-over-modal").style.display = "none";
+}
+
+async function doStartOver() {
+  const go = document.getElementById("so-go");
+  go.disabled = true;
+  go.textContent = "Starting over…";
+  try {
+    await api("POST", "/api/start-over", { forget_answers: !document.getElementById("so-keep-answers").checked });
+  } catch (e) {
+    startOverPreview = Object.assign({}, startOverPreview, { blocked: String(e.message || e) });
+    renderStartOverBody();
+    go.textContent = "Start over";
+    return;
+  }
+  go.textContent = "Start over";
+  closeStartOver();
+  // back to a fresh Connect: nothing finished, nothing ticked, no device
+  Object.assign(state, { plan: null, copyPreview: null, catalogPreview: null, cleanPreview: null, cleanDone: null,
+    lastStage: null, itemsBySrc: {}, activeStep: "connect", connectBusy: null,
+    connectMsg: { ok: true, text: "✓ Started over. Connect to a device to begin." } });
+  state.passed.clear();
+  state.cleanTicked.clear();
+  state.collapsedDecisions.clear();
+  ["stage-result", "copy-result", "catalog-result", "clean-result", "clean-activity", "review-summary"].forEach((id) => { document.getElementById(id).innerHTML = ""; });
+  state.sessionSaved = JSON.stringify(sessionData());
+  state.sessionSeen = Date.now() / 1000;
+  await loadHealth();
+  showActiveStep();
+}
+
+document.getElementById("start-over-btn").addEventListener("click", openStartOver);
+document.getElementById("so-cancel").addEventListener("click", closeStartOver);
+document.getElementById("so-go").addEventListener("click", doStartOver);
+document.getElementById("so-keep-answers").addEventListener("change", renderStartOverBody);
+document.getElementById("start-over-modal").addEventListener("click", (e) => { if (e.target.id === "start-over-modal") closeStartOver(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.getElementById("start-over-modal").style.display !== "none") closeStartOver();
+});
 
 // ---------- load ----------
 

@@ -1,0 +1,142 @@
+"""Start over (Chris, 2026-09-27, proposal J): clear this run's working state and go back to Connect.
+
+Cleared: staged frames not yet copied (the staging share), rendered previews and thumbnails, quality scores of the
+device's frames, what was left out on Select and kept or rejected on Review, decision answers (unless kept on
+purpose: after starting over on a different device, old answers may not make sense), the session (step, checkmarks,
+ticks), and the device connection.
+Kept: everything on the NAS and its catalog, logs and batch history, recent devices, Verify results, the
+sensitivity (σ), and the staging checksums of frames already copied (Clean up's proof that their NAS copies match).
+Nothing is deleted from a device or from the Astronomy share.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import shutil
+import time
+from pathlib import Path
+
+from astro_ingest import analysis, db, service, staging, state
+from astro_ingest.config import Config
+
+SESSION_FILE = "session.json"
+
+
+CACHE_SUBDIRS = ("previews", "thumbs")   # what analysis/api render into CACHE_DIR
+
+
+def _guard(cfg: Config) -> None:
+    """Staging and the cache must be the app's own folders: never the share or the state folder, nor a folder that
+    contains them (inside them is fine: the default cache lives in STATE_DIR, dev staging may live in the sandbox)."""
+    for name, folder in (("STAGING_DIR", Path(cfg.staging_dir)), ("CACHE_DIR", Path(cfg.cache_dir))):
+        f = folder.resolve()
+        for other in (Path(cfg.astro_root), Path(cfg.astro_nas), Path(cfg.state_dir)):
+            o = other.resolve()
+            if f == o or f in o.parents:
+                raise RuntimeError(f"{name} ({folder}) is or contains {other}: refusing to clear it")
+
+
+def _staging_slugs(cfg: Config) -> set[str]:
+    """The per-device folders the app created in STAGING_DIR (the only things Start over removes there)."""
+    slugs = {"local"} | {k.split("|", 1)[0] for k in staging.StagingStore(cfg).files}
+    slugs |= {r.get("slug") or staging.device_slug(r, False) for r in service.recent_devices(cfg)}
+    return {s for s in slugs if s and "/" not in s and s not in (".", "..")}
+
+
+def _tree_bytes(root: Path) -> tuple[int, int]:
+    files = size = 0
+    if root.is_dir():
+        for p in root.rglob("*"):
+            if p.is_file() and not p.is_symlink():
+                files += 1
+                size += p.stat().st_size
+    return files, size
+
+
+def _decision_keys(answers: dict) -> list[str]:
+    return [k for k in answers if not k.startswith(("exclude:", "keep:")) and k != analysis.SIGMA_KEY]
+
+
+def blocked(cfg: Config) -> str | None:
+    """Why starting over has to wait, if it does."""
+    if db.unfinished_batch(cfg):
+        return "a copy batch didn't finish: resume it on Copy & verify first (its staged frames are needed)"
+    if db.unfinished_cleanup(cfg):
+        return "a clean-up didn't finish: resume it on Clean up first"
+    return None
+
+
+def preview(cfg: Config) -> dict:
+    """What starting over would clear, with counts, for the confirmation."""
+    answers = service.load_answers(cfg)
+    staged = [_tree_bytes(Path(cfg.staging_dir) / s) for s in _staging_slugs(cfg)]
+    staged_files, staged_bytes = sum(f for f, _ in staged), sum(b for _, b in staged)
+    cache = [_tree_bytes(Path(cfg.cache_dir) / s) for s in CACHE_SUBDIRS]
+    cache_files, cache_bytes = sum(f for f, _ in cache), sum(b for _, b in cache)
+    rate, _ = service.transfer_rate(cfg)
+    quality = state.read_json(Path(cfg.state_dir) / analysis.QUALITY_FILE, {}).get("frames", {})
+    return {
+        "staged": {"files": staged_files, "bytes": staged_bytes, "restage_s": round(staged_bytes / 1e6 / rate) if rate else None},
+        "cache": {"files": cache_files, "bytes": cache_bytes},
+        "scores": sum(1 for k in quality if k.startswith("src|")),
+        "left_out": sum(1 for k in answers if k.startswith("exclude:")),
+        "kept_or_rejected": sum(1 for k in answers if k.startswith("keep:")),
+        "decision_answers": len(_decision_keys(answers)),
+        "device": service.remembered_device(cfg),
+        "blocked": blocked(cfg),
+    }
+
+
+def run(cfg: Config, forget_answers: bool = True) -> dict:
+    why = blocked(cfg)
+    if why:
+        raise RuntimeError(why)
+    before = preview(cfg)
+    stamp = dt.datetime.now(cfg.tz).strftime("%Y%m%d-%H%M%S")
+    log_path = Path(cfg.state_dir) / "logs" / f"startover-{stamp}.log"
+    cfg.check_writable(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+
+    _guard(cfg)
+    # staged frames: remove the device folders the app made; keep only the checksums that prove copies on the NAS
+    for slug in sorted(_staging_slugs(cfg)):
+        child = Path(cfg.staging_dir) / slug
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+            lines.append(f"staging: removed {child}")
+    store = staging.StagingStore(cfg)
+    proof = db.copied_hashes(cfg)
+    kept = {k: v for k, v in store.files.items() if v.get("blake2b") in proof}
+    lines.append(f"staging manifest: {len(store.files) - len(kept)} entries cleared, {len(kept)} kept (copies on the NAS)")
+    store.files = kept
+    store.save()
+
+    # previews and thumbnails (disposable renders)
+    for sub in CACHE_SUBDIRS:
+        child = Path(cfg.cache_dir) / sub
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+    lines.append(f"cache: cleared {before['cache']['files']} files")
+
+    # quality scores of device frames (NAS-side scores stay: they're about the NAS)
+    qpath = Path(cfg.state_dir) / analysis.QUALITY_FILE
+    q = state.read_json(qpath, {})
+    if q.get("frames"):
+        q["frames"] = {k: v for k, v in q["frames"].items() if not k.startswith("src|")}
+        state.write_json(cfg, qpath, q)
+    lines.append(f"quality: cleared {before['scores']} device-frame scores")
+
+    # choices and answers
+    answers = service.load_answers(cfg)
+    drop = [k for k in answers if k.startswith(("exclude:", "keep:"))] + (_decision_keys(answers) if forget_answers else [])
+    service.set_answers(cfg, {k: None for k in drop})
+    lines.append(f"answers: cleared {len(drop)} ({'including' if forget_answers else 'keeping'} decision answers)")
+
+    # the session (other windows follow it back to Connect) and the device connection
+    state.write_json(cfg, Path(cfg.state_dir) / SESSION_FILE, {"data": {}, "client": "start-over", "updated_at": time.time()})
+    service.disconnect_device(cfg)
+    lines.append("session reset; disconnected")
+
+    log_path.write_text("".join(f"{line}\n" for line in lines))
+    return {"cleared": before, "forgot_answers": forget_answers, "log": str(log_path)}
