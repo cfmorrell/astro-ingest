@@ -44,7 +44,7 @@ def stage_and_score(cfg):
     staging.run_staging(cfg, p.source.source, p.source.slug, todo, False, lambda *a, **k: None)
     p.source.reload()
     p = service.replan(cfg, p)
-    analysis.run_scoring(cfg, analysis.targets_by_group(cfg, p.source, p.scan, p.index, p.plan), lambda *a: None)
+    analysis.run_scoring(cfg, analysis.targets_by_group(cfg, p.source, p.scan, p.index, p.plan), lambda *a, **_: None)
     return service.replan(cfg, p)
 
 

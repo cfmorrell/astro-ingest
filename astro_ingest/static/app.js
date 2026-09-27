@@ -274,7 +274,13 @@ async function setFrameChoice(items, choiceFor) {
   // choiceFor(item) -> "keep" | "reject" | null (null = back to the recommendation)
   const updates = {};
   items.forEach((i) => { updates[`keep:${i.src}`] = choiceFor(i); });
-  applyPlan(await api("POST", "/api/answers", updates));
+  answered(await api("POST", "/api/answers", updates));
+}
+
+function answered(plan) {
+  // after any answer: the plan, then what Copy & verify would copy (it changes with every answer)
+  applyPlan(plan);
+  api("GET", "/api/copy/preview").then((pv) => { state.copyPreview = pv; if (!state.copyRunning) renderCopy(); }).catch(() => {});
 }
 
 function wantIngest(item, ingest) {
@@ -521,7 +527,7 @@ function stepStatus(step) {
   const passed = state.passed.has(step);
   switch (step) {
     case "connect": return { available: true, complete: !!(state.health && state.health.source_online) };
-    case "scan": return { available: planned, complete: passed && planned };
+    case "scan": return { available: planned || !!(state.health && state.health.source_online), complete: passed && planned };
     case "stage": return { available: planned, complete: passed && planned && selectedItems().every((i) => i.staged) };
     case "review": return { available: planned, complete: passed && planned && state.plan.summary.decisions_open === 0 };
     case "copy": return { available: planned, complete: passed && !!(state.copyPreview && state.copyPreview.copies === 0) };
@@ -583,8 +589,11 @@ function renderStepBar() {
   } else if (step === "stage" && p) {
     const sel = selectedItems();
     const staged = sel.filter((x) => x.staged).length;
-    parts.push(sel.length && staged === sel.length ? [b("Everything staged"), ` · ${sel.length} frame${sel.length === 1 ? "" : "s"}`] : [b(`${staged} of ${sel.length}`), " frames staged"]);
-    if (state.stageRunning) blocked = "Staging…";
+    const live = state.stageRunning ? state.stageLive : null;
+    if (live && live.phase === "scoring") parts.push([b(`${live.staged !== undefined ? live.staged : sel.length} frames staged`), ` · scoring light frames ${live.scored || 0} / ${live.to_score || "…"}`]);
+    else if (live && live.files_total !== undefined) parts.push([b(`${staged + live.files_done} of ${staged + live.files_total}`), " frames staged"]);
+    else parts.push(sel.length && staged === sel.length ? [b("Everything staged"), ` · ${sel.length} frame${sel.length === 1 ? "" : "s"}`] : [b(`${staged} of ${sel.length}`), " frames staged"]);
+    if (state.stageRunning) blocked = live && live.phase === "scoring" ? "Scoring light frames for Review…" : "Staging…";
   } else if (step === "review" && p) {
     const s = p.summary;
     parts.push([b(`${s.copy_files} file${s.copy_files === 1 ? "" : "s"}`), ` to copy · ${gb(s.copy_bytes)}`, s.decisions_open ? ` · ${s.decisions_open} decision${s.decisions_open === 1 ? "" : "s"} open` : ""]);
@@ -599,9 +608,10 @@ function renderStepBar() {
     if (state.catalogRunning) blocked = "Writing…";
   } else if (step === "clean" && state.cleanPreview) {
     const sel = cleanSelected();
-    const files = sel.reduce((a, x) => a + 1 + (x.thumb ? 1 : 0), 0);
+    const k = selectionCounts(sel);
+    const files = k.files;
     const bytes = sel.reduce((a, x) => a + x.size, 0);
-    parts.push([b(`${files} file${files === 1 ? "" : "s"}`), ` ticked · ${gb(bytes)}`]);
+    parts.push([b(`${files} file${files === 1 ? "" : "s"}`), ` ticked${files ? `: ${fileBreakdown(k.frames, k.thumbs, k.mac, k.other)}` : ""} · ${gb(bytes)}`]);
     const c = state.cleanPreview;
     del.textContent = c.unfinished ? `Resume clean-up ${c.unfinished}` : files ? `Delete ${files} file${files === 1 ? "" : "s"} from ${deviceName(c)}` : "Delete…";
     del.classList.toggle("armed", !!files || !!c.unfinished);
@@ -612,7 +622,7 @@ function renderStepBar() {
   (parts[0] || []).forEach((x) => status.appendChild(typeof x === "string" ? document.createTextNode(x) : x));
   if (step !== "clean") {
     next.disabled = !!blocked;
-    why.textContent = blocked && !/…$/.test(blocked) ? blocked : "";
+    why.textContent = blocked && (!/…$/.test(blocked) || /^Scoring/.test(blocked)) ? blocked : "";
     next.classList.toggle("ready", !blocked && stepDone(step));
   }
 }
@@ -765,6 +775,8 @@ async function afterConnect(res, what) {
   state.connectBusy = `Connected to ${what}. Scanning it…`;
   renderConnect();
   await loadHealth();
+  renderStepBar();          // Next works now; Scan Images shows the scan until it's done
+  renderStepper();
   await loadPlan(false);
   state.connectBusy = null;
   state.connectMsg = { ok: true, text: `✓ Connected to ${what}.` };
@@ -852,7 +864,12 @@ function renderScan() {
   const p = state.plan;
   const body = document.getElementById("scan-body");
   body.innerHTML = "";
-  if (!p) return;
+  if (!p) {
+    const dv = state.devices;
+    const name = dv && dv.remembered ? (dv.remembered.nickname || dv.remembered.label) : "the device";
+    if (state.scanning) body.appendChild(el("div", { class: "hint" }, [`Scanning ${name}: listing every file and reading frame headers in Autorun/ and Plan/… (about a minute over Wi-Fi)`]));
+    return;
+  }
   document.getElementById("scan-status-badge").style.display = "none";
   const when = new Date(p.scanned_at);
   document.getElementById("scanned-at").textContent = isNaN(when.getTime()) ? "" : `Scanned ${when.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
@@ -940,7 +957,7 @@ function toggleExclusions(items, exclude) {
   exclusionTimer = setTimeout(async () => {
     const updates = Object.assign({}, pendingExclusions);
     Object.keys(pendingExclusions).forEach((k) => delete pendingExclusions[k]);
-    applyPlan(await api("POST", "/api/answers", updates));
+    answered(await api("POST", "/api/answers", updates));
   }, 600);
 }
 
@@ -1014,7 +1031,14 @@ function renderStage(live) {
   const box = document.getElementById("stage-summary");
   box.innerHTML = "";
   let remaining, frames, data, speed;
-  if (live && live.files_total !== undefined) {
+  state.stageLive = live || null;
+  const scoring = !!(live && live.phase === "scoring");
+  if (scoring) {
+    // part 2 of the stage job: score the light frames (with their sessions' frames already on the NAS) for Review
+    remaining = ["✓", `${live.staged !== undefined ? live.staged : selected.length} frames staged`, "ok"];
+    frames = [live.to_score ? `${live.scored} / ${live.to_score}` : "…", "light frames scored for Review"];
+    data = ["—", "frames already on the NAS are scored alongside"]; speed = ["—", "speed"];
+  } else if (live && live.files_total !== undefined) {
     remaining = [live.eta_s !== null ? clock(live.eta_s) : "estimating…", "time remaining", "ok"];
     frames = [`${live.files_done} / ${live.files_total}`, "frames staged"];
     data = [`${gb(live.bytes_done)} / ${gb(live.bytes_total)}`, "data staged"];
@@ -1036,6 +1060,11 @@ function renderStage(live) {
 
   // the progress bar is always shown: idle, running, or complete
   const prog = document.getElementById("stage-progress");
+  if (scoring && live.to_score) {
+    const pct = Math.round((live.scored / live.to_score) * 100);
+    prog.querySelector(".progress-fill").style.width = `${pct}%`;
+    prog.querySelector(".pct").textContent = `${pct}%`;
+  }
   if (!live) {
     const pct = selected.length ? Math.round(((allBytes - bytes) / (allBytes || 1)) * 100) : 0;
     prog.querySelector(".progress-fill").style.width = `${pct}%`;
@@ -1043,10 +1072,10 @@ function renderStage(live) {
     prog.querySelector(".msg").textContent = !selected.length ? "" : toRead.length ? "ready to stage" : "all selected frames are staged";
   }
   const btn = document.getElementById("stage-run-btn");
-  btn.textContent = live ? "Staging…" : toRead.length ? `Stage ${toRead.length} frame${toRead.length === 1 ? "" : "s"}` : "Everything selected is staged";
+  btn.textContent = scoring ? "Scoring light frames…" : live ? "Staging…" : toRead.length ? `Stage ${toRead.length} frame${toRead.length === 1 ? "" : "s"}` : "Everything selected is staged";
   btn.classList.toggle("primary", !!(live || toRead.length));
   if (!state.stageRunning) btn.disabled = toRead.length === 0;
-  setStepBadge("stage-status-badge", live ? "accent" : toRead.length ? "" : "ok", live ? "staging…" : toRead.length ? "not staged" : (selected.length ? "staged" : "nothing selected"));
+  setStepBadge("stage-status-badge", live ? "accent" : toRead.length ? "" : "ok", scoring ? "scoring…" : live ? "staging…" : toRead.length ? "not staged" : (selected.length ? "staged" : "nothing selected"));
   renderStepBar();
 }
 
@@ -1065,7 +1094,7 @@ async function watchStageJob(jobId) {
       res.appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "staging failed"]));
     }
     await loadPlan(false);
-  }, (snap) => renderStage(snap.stats && snap.stats.phase !== "scoring" ? snap.stats : null));
+  }, (snap) => renderStage(snap.stats && (snap.stats.phase === "scoring" || snap.stats.files_total !== undefined) ? snap.stats : null));
 }
 
 async function runStage() {
@@ -1323,7 +1352,7 @@ async function runCatalog() {
 const CLEAN_SECTIONS = [
   ["Ready to delete", "a checksum proves the NAS copy is identical", ["verified"]],
   ["Needs a check first", "on the NAS, copied there before astro-ingest", ["to-verify"]],
-  ["Not on the NAS", "deleting these loses them", ["rejected", "left-out", "over-cap", "not-kept", "other", "orphan-thumb"]],
+  ["Not on the NAS", "deleting these loses them", ["released", "rejected", "left-out", "over-cap", "not-kept", "other", "orphan-thumb"]],
   ["Stays on the device", "", ["differs", "not-copied", "blocked", "waiting", "never"]],
 ];
 const QUICK_S_PER_FRAME = 0.15;   // measured 0.12 s per frame on the real ASIAIR over Wi-Fi (2026-09-27)
@@ -1366,7 +1395,7 @@ function renderCleanStep() {
   document.getElementById("clean-title").textContent = `Clean up ${deviceName(c)}`;
   const sel = cleanSelected();
   setStepBadge("clean-status-badge", state.cleanRunning ? "accent" : !c.device_delete_allowed ? "warn" : "",
-    state.cleanRunning ? "working…" : !c.device_delete_allowed ? "deleting is switched off" : sel.length ? `${sel.length} ticked` : "nothing ticked");
+    state.cleanRunning ? "working…" : !c.device_delete_allowed ? "deleting is switched off" : sel.length ? `${selectionCounts(sel).files} files ticked` : "nothing ticked");
   document.getElementById("clean-recommended-btn").disabled = state.cleanRunning ||
     !c.groups.some((g) => g.recommended && g.selectable && g.items.some((i) => !state.cleanTicked.has(i.rel)));
   const guard = document.getElementById("clean-guard");
@@ -1387,11 +1416,31 @@ function renderCleanStep() {
   renderStepBar();
 }
 
+function fileBreakdown(frames, thumbs, mac, other) {
+  // "109 frames + 109 thumbnails + 2 other files": what a file count is made of
+  const n = (k, w) => (k ? `${k} ${w}${k === 1 ? "" : "s"}` : null);
+  return [n(frames, "frame"), n(thumbs, "thumbnail"), n(mac, "Mac metadata file"), n(other, "other file")].filter(Boolean).join(" + ");
+}
+
+function selectionCounts(items) {
+  // what the ticked files are: frames (each with its thumbnail and any Mac metadata), thumbnails, Mac metadata, other
+  const k = { frames: 0, thumbs: 0, mac: 0, other: 0, files: 0 };
+  items.forEach((i) => {
+    const name = basename(i.rel);
+    if (i.kind === "frame") { k.frames += 1; if (i.thumb) k.thumbs += 1; }
+    else if (name === ".DS_Store" || name.startsWith("._")) k.mac += 1;
+    else if (name.endsWith("_thn.jpg")) k.thumbs += 1;
+    else k.other += 1;
+    k.mac += i.companions ? i.companions.length : 0;
+  });
+  k.files = k.frames + k.thumbs + k.mac + k.other;
+  return k;
+}
+
 function cleanGroup(c, g) {
   const ticked = g.items.filter((i) => state.cleanTicked.has(i.rel));
-  const frames = g.items.filter((i) => i.thumb).length;
-  const count = g.id === "never" ? `${g.files} file${g.files === 1 ? "" : "s"}`
-    : frames ? `${g.items.length} frame${g.items.length === 1 ? "" : "s"}${frames ? " + thumbnails" : ""}` : `${g.files} file${g.files === 1 ? "" : "s"}`;
+  const all = selectionCounts(g.items);
+  const count = g.id === "never" ? `${g.files} file${g.files === 1 ? "" : "s"}` : fileBreakdown(all.frames, all.thumbs, all.mac, all.other);
   const top = el("div", { class: "top" }, [
     g.selectable ? el("input", {
       type: "checkbox", "aria-label": `tick every file in ${g.label}`,
@@ -1402,7 +1451,7 @@ function cleanGroup(c, g) {
     el("span", { class: "t" }, [g.label]),
     g.recommended ? el("span", { class: "badge ok" }, ["recommended"]) : null,
     el("span", { class: "num" }, [`${count} · ${gb(g.bytes)}`]),
-    g.selectable && ticked.length && ticked.length < g.items.length ? el("span", { class: "hint", style: "margin:0;" }, [`${ticked.length} of ${g.items.length} ticked`]) : null,
+    g.selectable && ticked.length && ticked.length < g.items.length ? el("span", { class: "hint", style: "margin:0;" }, [`${selectionCounts(ticked).files} of ${g.files} files ticked`]) : null,
   ]);
   const body = [top];
   if (g.note && !/^not on the NAS/.test(g.note)) body.push(el("div", { class: "hint", style: "margin:4px 0 0;" }, [g.note]));   // the section already says it
@@ -1411,7 +1460,7 @@ function cleanGroup(c, g) {
     body.push(toggleList(`show ${g.items.length} item${g.items.length === 1 ? "" : "s"}`, g.items.map((i) => el("label", { title: i.how || "" }, [
       g.selectable ? el("input", { type: "checkbox", checked: state.cleanTicked.has(i.rel) ? "" : null, disabled: state.cleanRunning ? "" : null,
         onchange: (e) => { setCleanTick(i.rel, e.target.checked); renderCleanStep(); } }, []) : null,
-      el("span", { class: "session-path" }, [i.rel + (i.thumb ? "  + thumbnail" : "")]),
+      el("span", { class: "session-path" }, [i.rel + (i.thumb ? "  + thumbnail" : "") + (i.companions && i.companions.length ? "  + Mac metadata" : "")]),
       i.nas.length ? el("span", { class: "hint", style: "margin:0;" }, [`NAS: ${i.nas[0]}`]) : (i.how ? el("span", { class: "hint", style: "margin:0;" }, [i.how]) : null),
     ]))));
   }
@@ -1553,7 +1602,7 @@ async function runCleanDelete() {
   if (c.unfinished) what = `Resume the interrupted clean-up ${c.unfinished} on ${deviceName(c)}?`;
   else {
     const per = {};
-    sel.forEach((i) => { const g = c.groups.find((x) => x.items.includes(i)); per[g.label] = (per[g.label] || 0) + 1 + (i.thumb ? 1 : 0); });
+    sel.forEach((i) => { const g = c.groups.find((x) => x.items.includes(i)); per[g.label] = (per[g.label] || 0) + (i.files || 1 + (i.thumb ? 1 : 0)); });
     const files = Object.values(per).reduce((a, b) => a + b, 0);
     what = `Delete ${files} file${files === 1 ? "" : "s"} (${gb(sel.reduce((a, i) => a + i.size, 0))}) from ${deviceName(c)}?\n\n` +
       Object.entries(per).map(([k, n]) => `  ${n}  ${k}`).join("\n") + "\n\nThis can't be undone.";
@@ -1611,7 +1660,7 @@ function renderReview() {
 
 async function answerDecision(d, value) {
   try {
-    applyPlan(await api("POST", "/api/answers", { [d.id]: value }));
+    answered(await api("POST", "/api/answers", { [d.id]: value }));
   } catch (e) {
     alert(`Couldn't save that answer: ${e.message || e}`);
   }
@@ -1996,6 +2045,8 @@ function renderDevicePill(searching) {
 
 async function loadPlan(refresh) {
   setStepBadge("review-status-badge", "", refresh ? "scanning…" : "loading…");
+  state.scanning = true;
+  renderScan();
   try {
     if (refresh) await api("POST", "/api/scan");
     const [plan, preview, batches] = await Promise.all([api("GET", "/api/plan"), api("GET", "/api/copy/preview"), api("GET", "/api/batches")]);
@@ -2011,6 +2062,7 @@ async function loadPlan(refresh) {
     document.getElementById("review-summary").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
     state.activeStep = "connect";
   }
+  state.scanning = false;
   showActiveStep();
 }
 
@@ -2042,7 +2094,7 @@ document.getElementById("quality-sigma").addEventListener("input", (e) => {
 document.getElementById("quality-sigma").addEventListener("change", async (e) => {
   const plan = await api("POST", "/api/answers", { "quality-sigma": String(e.target.value) });
   state.sigmaLive = null;
-  applyPlan(plan);
+  answered(plan);
 });
 
 (async function init() {

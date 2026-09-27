@@ -135,3 +135,14 @@ def test_catalog_through_the_api(tmp_path):
         time.sleep(0.02)
     assert snap["status"] == "succeeded", snap
     assert client.get("/api/catalog/preview").json()["summary"]["writes"] == 0
+
+
+def test_links_already_on_the_live_share_are_not_added(tmp_path):
+    # dev: the sandbox holds only part of the share; a link the live share already has isn't missing
+    cfg, root, p = copied(tmp_path)
+    nas = tmp_path / "nas"
+    (nas / "102-ByICNumber").mkdir(parents=True, exist_ok=True)
+    (nas / "102-ByICNumber" / "IC1848-SoulNebula").symlink_to("../SoulNebula-IC1848")
+    kinds = {(c.kind, c.path): c.status for c in catalog.preview(cfg).changes}
+    assert ("link-add", "102-ByICNumber/IC1848-SoulNebula") not in kinds
+    assert kinds[("link-add", f"103-ByDate/{SOUL.split('/')[1]}")] == "add"      # not on either: still added

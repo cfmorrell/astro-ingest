@@ -257,8 +257,9 @@ def create_app(cfg: Config) -> FastAPI:
             src.reload()
             q = replan()
             targets = analysis.targets_by_group(cfg, q.source, q.scan, q.index, q.plan)
-            result["quality"] = analysis.run_scoring(cfg, targets, lambda pct, msg: progress(90 + pct * 0.1, msg,
-                                                                                               phase="scoring"))
+            staged_n = result.get("staged", 0) + result.get("already_staged", 0)
+            result["quality"] = analysis.run_scoring(cfg, targets, lambda pct, msg, **st: progress(
+                90 + pct * 0.1, msg, phase="scoring", staged=staged_n, **st))
             replan()
             return result
 

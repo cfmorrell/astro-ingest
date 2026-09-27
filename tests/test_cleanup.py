@@ -147,3 +147,52 @@ def test_verify_thorough_reads_everything(tmp_path):
     assert res["verified"] == 1 and res["bytes"] == light.stat().st_size
     item = next(c for c in cleanup.preview(cfg, p).candidates if c.rel == rel)
     assert item.group == "verified" and "thorough" in item.how and not item.nas[0][1].startswith("quick:")
+
+
+class NotSupportedForMacFiles:
+    """Wraps a source like the ASIAIR's file server: deleting a Mac metadata file removes it but reports an error;
+    a "._" file vanishes with its partner."""
+
+    def __init__(self, source, air, stubborn=()):
+        self.source, self.air, self.stubborn = source, air, set(stubborn)
+
+    def __getattr__(self, name):
+        return getattr(self.source, name)
+
+    def delete(self, rel):
+        name = rel.rsplit("/", 1)[-1]
+        if rel in self.stubborn:
+            raise OSError("STATUS_NOT_SUPPORTED")
+        self.source.delete(rel)
+        folder = rel.rsplit("/", 1)[0]
+        buddy = self.air / folder / f"._{name}"
+        if buddy.exists():
+            buddy.unlink()                                             # the metadata goes with its file
+        if name == ".DS_Store" or name.startswith("._"):
+            raise OSError("STATUS_NOT_SUPPORTED")
+
+
+def test_mac_metadata_goes_with_its_file(tmp_path):
+    cfg, air, root, p = copied(tmp_path)
+    frame = next(c for c in cleanup.preview(cfg, p).candidates if c.group == "verified" and c.thumb)
+    folder, name = frame.rel.rsplit("/", 1)
+    (air / folder / f"._{name}").write_bytes(b"x" * 4096)              # a Mac browsed the share
+    (air / "Autorun").mkdir(exist_ok=True)
+    (air / "Autorun" / ".DS_Store").write_bytes(b"d" * 6148)
+    (air / "Autorun" / "._.DS_Store").write_bytes(b"m" * 4096)
+    (air / "Plan" / ".DS_Store").write_bytes(b"d" * 6148)
+    p = service.scan_and_plan(cfg, service.open_source(cfg))
+    pv = cleanup.preview(cfg, p)
+    c = next(x for x in pv.candidates if x.rel == frame.rel)
+    assert [x[0] for x in c.companions] == [f"{folder}/._{name}"] and c.files == 3
+    others = sorted(x.rel for x in pv.candidates if x.group == "other")
+    assert "Autorun/._.DS_Store" not in others and "Autorun/.DS_Store" in others   # ._.DS_Store goes with .DS_Store
+
+    p.source = NotSupportedForMacFiles(p.source, air, stubborn={"Plan/.DS_Store"})
+    cid = cleanup.approve(cfg, p, [frame.rel, "Autorun/.DS_Store", "Plan/.DS_Store"])
+    res = cleanup.run(cfg, p, cid, now=LATER)
+    assert not res["failed"] and not res["unexpected_missing"] and not res["still_there"], res
+    assert not (air / folder / f"._{name}").exists() and not (air / "Autorun" / ".DS_Store").exists()
+    assert not (air / "Autorun" / "._.DS_Store").exists()
+    kept = {s["rel"]: s["detail"] for s in res["skipped"]}
+    assert "Mac metadata" in kept["Plan/.DS_Store"] and (air / "Plan" / ".DS_Store").exists()

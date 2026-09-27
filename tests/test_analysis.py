@@ -42,9 +42,9 @@ def test_scoring_caches_and_flags_per_group(tmp_path):
     p = service.scan_and_plan(cfg, service.open_source(cfg))
     targets = analysis.targets_by_group(cfg, p.source, p.scan, p.index, p.plan)
     messages = []
-    first = analysis.run_scoring(cfg, targets, lambda pct, msg: messages.append(msg))
+    first = analysis.run_scoring(cfg, targets, lambda pct, msg, **_: messages.append(msg))
     assert (first["scored"], first["failed"]) == (10, 0) and messages
-    again = analysis.run_scoring(cfg, targets, lambda pct, msg: None)
+    again = analysis.run_scoring(cfg, targets, lambda pct, msg, **_: None)
     assert again["scored"] == 0 and again["skipped_cached"] == 10     # nothing re-read
     assert (cfg.state_dir / "quality.json").is_file()
     assert len(list((cfg.cache_dir / "previews").glob("*-320.png"))) == 4

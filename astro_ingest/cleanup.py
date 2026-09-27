@@ -45,7 +45,8 @@ GROUPS = {
     "rejected": ("Rejected for quality", True, False, "not on the NAS: deleting loses them"),
     "left-out": ("Left out on Select", True, False, "not on the NAS: deleting loses them"),
     "over-cap": ("Beyond the 10-frame cap", True, False, "not on the NAS (the first 10 of the set are)"),
-    "not-kept": ("Not kept by the rules", True, False, "not on the NAS"),
+    "released": ("Released for deletion", True, False, "answered on Review: not going to the NAS"),
+    "not-kept": ("Not kept by the filing rules", True, False, "not on the NAS"),
     "other": ("Other files", True, False, "not written by the ASIAIR's capture"),
     "orphan-thumb": ("Orphan thumbnails", True, False, "thumbnails whose .fit is gone"),
     "blocked": ("Flats without lights", False, False, "kept until they're filed or released for deletion on Review"),
@@ -68,14 +69,22 @@ class Candidate:
     thumb: tuple[str, int, float] | None = None
     nas: list[list[str]] = field(default_factory=list)   # [[nas rel, blake2b], ...]
     how: str = ""                      # how it was verified / why it's in its group
+    # Mac metadata ("._<name>" files a Mac leaves on the share): the hidden metadata of this file or its thumbnail.
+    # The ASIAIR's file server removes them together with their partner, so they go with it (like a thumbnail).
+    companions: list[tuple[str, int, float]] = field(default_factory=list)
 
     @property
     def bytes(self) -> int:
-        return self.size + (self.thumb[1] if self.thumb else 0)
+        return self.size + (self.thumb[1] if self.thumb else 0) + sum(x[1] for x in self.companions)
+
+    @property
+    def files(self) -> int:
+        return 1 + (1 if self.thumb else 0) + len(self.companions)
 
     def to_dict(self) -> dict:
         return {"rel": self.rel, "size": self.bytes, "group": self.group, "thumb": self.thumb[0] if self.thumb else None,
-                "nas": [n[0] for n in self.nas], "how": self.how}
+                "nas": [n[0] for n in self.nas], "how": self.how, "files": self.files, "kind": self.kind,
+                "companions": [x[0] for x in self.companions]}
 
 
 @dataclass
@@ -94,8 +103,9 @@ class Preview:
             cs = by.get(gid, [])
             if cs:
                 out.append({"id": gid, "label": label, "selectable": selectable, "recommended": recommended,
-                            "ticked": False, "note": note,
-                            "files": len(cs) + sum(1 for c in cs if c.thumb), "bytes": sum(c.bytes for c in cs),
+                            "ticked": False, "note": note, "frames": sum(1 for c in cs if c.kind == "frame"),
+                            "thumbs": sum(1 for c in cs if c.thumb), "mac": sum(len(c.companions) for c in cs),
+                            "files": sum(c.files for c in cs), "bytes": sum(c.bytes for c in cs),
                             "items": [c.to_dict() for c in cs] if gid != "never" else []})
         return out
 
@@ -159,10 +169,35 @@ def preview(cfg: Config, planned) -> Preview:
                 c.how = f"copied and verified by batch {done[0]['batch']}"
             else:
                 c.group, c.how = "to-verify", "on the NAS (same name and size): " + ", ".join(it.ingested_at[:2])
+        elif it.action == P.NOT_KEPT and "released for deletion" in (it.reason or ""):
+            c.group = "released"
         else:
             c.group = CALLOUT_GROUP.get(it.action, "never")
         out.append(c)
+    _attach_mac_metadata(out)
     return Preview(planned.source.label, delete_allowed(cfg, planned.source), out, len(db.uncatalogued_batches(cfg)))
+
+
+def is_mac_metadata(rel: str) -> bool:
+    name = rel.rsplit("/", 1)[-1]
+    return name == ".DS_Store" or name.startswith("._")
+
+
+def _attach_mac_metadata(out: list[Candidate]) -> None:
+    """Fold each "._<name>" file into the candidate for <name> (a file, a frame, or a frame's thumbnail)."""
+    owner: dict[str, Candidate] = {}
+    for c in out:
+        owner[c.rel] = c
+        if c.thumb:
+            owner[c.thumb[0]] = c
+    for c in list(out):
+        folder, _, name = c.rel.rpartition("/")
+        if not name.startswith("._") or c.kind != "file":
+            continue
+        partner = owner.get(f"{folder}/{name[2:]}" if folder else name[2:])
+        if partner is not None and partner is not c:
+            partner.companions.append((c.rel, c.size, c.mtime))
+            out.remove(c)
 
 
 # ---------------------------------------------------------------- Verify (decision 6)
@@ -257,6 +292,10 @@ def approve(cfg: Config, planned, selected: list[str]) -> str:
         if c.thumb:
             check_deletable(c.thumb[0])
             ops.append({"kind": "thumb", "rel": c.thumb[0], "size": c.thumb[1], "mtime": c.thumb[2], "group": c.group})
+        for rel2, size2, mtime2 in c.companions:
+            check_deletable(rel2)
+            ops.append({"kind": "companion", "rel": rel2, "size": size2, "mtime": mtime2, "group": c.group,
+                        "partner": c.rel})
     if not ops:
         raise ValueError("nothing selected")
     cid = base = dt.datetime.now(cfg.tz).strftime("%Y%m%d-%H%M%S")
@@ -327,6 +366,9 @@ def run(cfg: Config, planned, cleanup_id: str, progress: Callable[..., None] = l
             if o["kind"] == "thumb" and frame_ok.get(asiair.fit_for_thumb(o["rel"])) is False:
                 record(o, "skipped", "its frame was kept")
                 continue
+            if o["kind"] == "companion" and frame_ok.get(_partner(o["rel"])) is False:
+                record(o, "skipped", "its file was kept")
+                continue
             status, detail = _delete(source, o, frame_ok)
             record(o, status, detail)
             if status == "deleted":
@@ -373,18 +415,38 @@ def _check(cfg: Config, o: dict, before: dict, frame_ok: dict) -> tuple[str, str
         if p is None or not fsops.digest_matches(p, digest):
             frame_ok[rel] = False
             return "skipped", f"NAS copy {nas_rel} is {'missing' if p is None else 'different now'}"
-    if o["kind"] != "thumb" and o["group"] == "verified" and not o["nas"]:
+    if o["kind"] not in ("thumb", "companion") and o["group"] == "verified" and not o["nas"]:
         frame_ok[rel] = False
         return "skipped", "no NAS copy recorded"
     return "ok", ""
 
 
+def _partner(rel: str) -> str:
+    """The file a "._<name>" Mac metadata file belongs to (a frame, for a thumbnail's metadata)."""
+    folder, _, name = rel.rpartition("/")
+    p = f"{folder}/{name[2:]}" if folder else name[2:]
+    return asiair.fit_for_thumb(p) if p.endswith("_thn.jpg") else p
+
+
 def _delete(source, o: dict, frame_ok: dict) -> tuple[str, str]:
     rel = o["rel"]
+    if o["kind"] == "companion" and source.stat(rel) is None:
+        frame_ok[rel] = True
+        return "gone", "removed with its file (Mac metadata)"
     try:
         source.delete(rel)
-    except (OSError, DeleteRefused) as e:
+    except DeleteRefused as e:
         frame_ok[rel] = False
+        return "failed", str(e)
+    except OSError as e:
+        # The ASIAIR's file server answers "not supported" for Mac metadata files (.DS_Store, ._*) yet removes them:
+        # believe the listing, not the reply.
+        if source.stat(rel) is None:
+            frame_ok[rel] = True
+            return "deleted", "gone (the device replied: not supported)"
+        frame_ok[rel] = False
+        if is_mac_metadata(rel):
+            return "skipped", "the device won't delete this Mac metadata file (harmless; a Mac left it)"
         return "failed", str(e)
     if source.stat(rel) is not None:
         frame_ok[rel] = False

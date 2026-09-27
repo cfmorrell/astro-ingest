@@ -181,7 +181,7 @@ def cmd_quality(args: argparse.Namespace) -> int:
     targets = analysis.targets_by_group(cfg, source, planned.scan, planned.index, planned.plan)
     print(f"{len(targets)} light groups, {sum(len(v) for v in targets.values())} frames incl. NAS peers", flush=True)
 
-    def progress(pct: float, msg: str) -> None:
+    def progress(pct: float, msg: str, **_) -> None:
         if msg.startswith("FAILED") or int(pct) % 5 == 0:
             print(f"[{pct:5.1f}%] {msg}", flush=True)
 
@@ -279,7 +279,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
     planned = replan(cfg, planned)
     if not args.no_score:
         targets = analysis.targets_by_group(cfg, planned.source, planned.scan, planned.index, planned.plan)
-        print("scoring:", analysis.run_scoring(cfg, targets, lambda p, m: None))
+        print("scoring:", analysis.run_scoring(cfg, targets, lambda p, m, **_: None))
     return 0
 
 

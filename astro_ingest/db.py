@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS cleanup_ops (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cleanup_id TEXT NOT NULL REFERENCES cleanups(id),
     seq INTEGER NOT NULL,
-    kind TEXT NOT NULL,              -- frame | thumb | file
+    kind TEXT NOT NULL,              -- frame | thumb | file | companion (Mac metadata of the file before it)
     rel TEXT NOT NULL,               -- path on the device
     size INTEGER NOT NULL,
     mtime REAL NOT NULL,             -- as scanned: must still match before the delete

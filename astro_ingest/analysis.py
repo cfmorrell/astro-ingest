@@ -127,7 +127,8 @@ def targets_by_group(cfg: Config, source: Source, scan: Scan, index: NasIndex, p
     return out
 
 
-def run_scoring(cfg: Config, targets: dict[str, list[ScoreTarget]], progress: Callable[[float, str], None]) -> dict:
+def run_scoring(cfg: Config, targets: dict[str, list[ScoreTarget]], progress: Callable[..., None]) -> dict:
+    # progress(pct, message, scored=n, to_score=total)
     """Score (and thumbnail) every target not already in the store. Returns counts for the job result."""
     store = QualityStore(cfg)
     todo = [t for ts in targets.values() for t in ts if t.readable and (
@@ -135,7 +136,8 @@ def run_scoring(cfg: Config, targets: dict[str, list[ScoreTarget]], progress: Ca
     done = failed = 0
     started = time.time()
     for n, t in enumerate(todo, 1):
-        progress((n - 1) / len(todo) * 100.0, f"scoring {t.src or t.key.split('|')[1]} ({n}/{len(todo)})")
+        progress((n - 1) / len(todo) * 100.0, f"scoring {t.src or t.key.split('|')[1]} ({n}/{len(todo)})",
+                 scored=n - 1, to_score=len(todo))
         try:
             with t.open() as fh:
                 data, header = imaging.load_fits(fh)
@@ -148,7 +150,8 @@ def run_scoring(cfg: Config, targets: dict[str, list[ScoreTarget]], progress: Ca
             done += 1
         except Exception as exc:  # one bad frame must not stop the rest; it stays unscored and is reported
             failed += 1
-            progress((n - 1) / len(todo) * 100.0, f"FAILED {t.key}: {type(exc).__name__}: {exc}")
+            progress((n - 1) / len(todo) * 100.0, f"FAILED {t.key}: {type(exc).__name__}: {exc}",
+                     scored=n - 1, to_score=len(todo))
         if n % 25 == 0:
             store.save()
     store.save()

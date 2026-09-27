@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import difflib
+import os
 import io
 import re
 from collections import Counter
@@ -180,6 +181,9 @@ def preview(cfg: Config, today: dt.date | None = None) -> Preview:
     all_rows = rows + new_rows
     want = links.wanted(root, all_rows)
     add, remove = links.diff(root, want)
+    # dev: the sandbox holds only part of the share; a link the live share already has isn't "missing"
+    for other in roots[1:]:
+        add = [a for a in add if not ((other / a).is_symlink() and os.readlink(other / a) == want[a])]
     changes += [Change("link-remove", r, "remove", "no longer matches targets.csv / the sessions") for r in remove]
     changes += [Change("link-add", a, "add", "", target=want[a]) for a in add]
     md = links.index_markdown(all_rows)
