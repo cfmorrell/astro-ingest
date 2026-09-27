@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astro-ingest"
-description = "Pull capture data off the ASIAIR, file it into the Astronomy archive, and keep the ASIAIR clean."
+description = "Pull capture data off the ASIAIR, ingest it onto the Astronomy share, and keep the ASIAIR clean."
 requires-python = ">=3.12"
 dynamic = ["version"]
 dependencies = [

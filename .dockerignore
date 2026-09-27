@@ -1,0 +1,21 @@
+# Only pyproject.toml, README.md and astro_ingest/ go into the image (see Dockerfile)
+.git
+.github
+.venv
+.venv-smbtest
+.pytest_cache
+*.egg-info
+__pycache__
+*.py[cod]
+.env
+.claude
+dev
+docs
+reference
+tests
+state
+**/*.fit
+**/*.fits
+**/*.jpg
+**/.DS_Store
+**/._*

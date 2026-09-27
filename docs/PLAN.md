@@ -251,7 +251,7 @@ The default `STATE_DIR` in dev is `/astro-sandbox/Z95-ClaudeReferences/ingest/`.
    end (Connect → Scan → Stage → Review → Copy & verify → Catalog → Clean up), run a full-size ingest of the sample and
    then go through the app screen by screen together for refinements: wording, layout, defaults, and anything that
    only shows up with real data at full scale. Basic functionality first, polish after.
-7. **Production.** App Dockerfile, a `docker-publish` workflow (same as the stacker), and a run script (`ASTRO_ROOT=/astro` rw, LAN access for discovery), put the app
+7. **Production (image, workflow and template ready 2026-09-27; install pending the dev container's final run).** App Dockerfile, a `docker-publish` workflow (same as the stacker), and a run script (`ASTRO_ROOT=/astro` rw, LAN access for discovery), put the app
    behind Nginx Proxy Manager with authentication (it deletes source data), and confirm the NAS backup first.
 
 ## Verification

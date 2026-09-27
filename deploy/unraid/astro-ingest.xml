@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!-- UnRAID template for astro-ingest (docs/DEPLOY.md). Install: copy to
+     /boot/config/plugins/dockerMan/templates-user/my-astro-ingest.xml, then Docker > Add Container > Template. -->
+<Container version="2">
+  <Name>astro-ingest</Name>
+  <Repository>ghcr.io/cfmorrell/astro-ingest:latest</Repository>
+  <Registry>https://github.com/cfmorrell/astro-ingest/pkgs/container/astro-ingest</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/cfmorrell/astro-ingest</Support>
+  <Project>https://github.com/cfmorrell/astro-ingest</Project>
+  <Overview>Pulls capture data off a ZWO ASIAIR over SMB, files it onto an Astronomy share by that share's rules (review screen first, checksum-verified copies, PROJECT_INFO.txt and index links), then cleans the ASIAIR with approval. Built around one specific share layout (docs/ORGANIZATION_GUIDE.md): read that before pointing it at yours.</Overview>
+  <Category>Tools: MediaApp:Photos</Category>
+  <WebUI>http://[IP]:[PORT:8000]/</WebUI>
+  <Icon/>
+  <ExtraParams/>
+  <DateInstalled/>
+  <Config Name="Web UI port" Target="8000" Default="8091" Mode="tcp" Description="Port for the web app. 8091 leaves 8090 to the dev container while both exist." Type="Port" Display="always" Required="true" Mask="false">8091</Config>
+  <Config Name="Astronomy share" Target="/astro" Default="/mnt/user/Astronomy" Mode="rw" Description="The Astronomy share, READ-WRITE: frames are filed here, and app state lives in Z95-ClaudeReferences/ingest." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/Astronomy</Config>
+  <Config Name="Staging" Target="/staging" Default="/mnt/user/astro-ingest-staging" Mode="rw" Description="Frames read once from the ASIAIR, kept until they're filed. Its own share, outside the Astronomy share." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/astro-ingest-staging</Config>
+  <Config Name="Preview cache" Target="/cache" Default="/mnt/user/docker_appdata/astro-ingest/cache" Mode="rw" Description="Rendered previews (disposable)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/docker_appdata/astro-ingest/cache</Config>
+  <Config Name="Time zone" Target="TZ" Default="America/New_York" Mode="" Description="Where you image: night dates come from the ASIAIR's local time." Type="Variable" Display="always" Required="true" Mask="false">America/New_York</Config>
+  <Config Name="Allow deleting from the ASIAIR" Target="ALLOW_DEVICE_DELETE" Default="0" Mode="" Description="1 lets Clean up delete from the device (only checksum-proven or explicitly ticked files, after approval). Leave 0 until your backups are in place." Type="Variable" Display="always" Required="true" Mask="false">0</Config>
+  <Config Name="Home network (optional)" Target="ASIAIR_SUBNET" Default="" Mode="" Description="Only to override the detected network, e.g. 192.168.1.0/24. Normally worked out from your browser's address." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Assumed Wi-Fi speed (MB/s)" Target="ASSUMED_WIFI_MB_S" Default="10" Mode="" Description="Used for time estimates until a first staging run measures the real speed." Type="Variable" Display="advanced" Required="false" Mask="false">10</Config>
+</Container>

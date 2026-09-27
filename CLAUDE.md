@@ -155,6 +155,13 @@ To see the UI, run `.venv/bin/astro-ingest serve` and screenshot it with headles
 `.venv/bin/python dev/screenshot.py http://localhost:8000/ /tmp/shot.png [--click "Review"] [--full]`, then view the
 PNG with the Read tool (the script also prints browser console errors).
 
+**Production** (docs/DEPLOY.md): the root `Dockerfile` builds the app image (`dev/Dockerfile` is only this dev
+container); `.github/workflows/docker-publish.yml` runs the tests, then pushes `ghcr.io/cfmorrell/astro-ingest`
+(`latest`, `sha-…`, `v…` tags) on pushes to `main`. The image mounts the Astronomy share **read-write** at `/astro`
+(ASTRO_ROOT = ASTRO_NAS), state in `/astro/Z95-ClaudeReferences/ingest`, `/staging`, `/cache`; runs as 99:100; host
+port 8091 (8090 is dev's). UnRAID template: `deploy/unraid/astro-ingest.xml`; `deploy/run.sh` is the `docker run`
+equivalent. `ALLOW_DEVICE_DELETE` is 0 in the image.
+
 ## Hard rules
 - In dev, **write only under `ASTRO_ROOT=/astro-sandbox`**. `/astro` is mounted read-only; don't try to work around that.
 - Never delete inside the share; retire to `_to_delete/`. Never overwrite; skip and report clashes.

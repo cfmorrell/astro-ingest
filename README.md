@@ -7,6 +7,8 @@ and, after verified copies and approval, cleans up the source.
 
 - Spec: [`docs/ClaudeHandoff.md`](docs/ClaudeHandoff.md). Filing rules: [`docs/ORGANIZATION_GUIDE.md`](docs/ORGANIZATION_GUIDE.md).
 - Dev environment: [`docs/SETUP.md`](docs/SETUP.md) (UnRAID dev container, GitHub, Claude Code).
+- Install on UnRAID: [`docs/DEPLOY.md`](docs/DEPLOY.md): image `ghcr.io/cfmorrell/astro-ingest`, built by GitHub Actions
+  on every push to `main` (after the tests pass); UnRAID template in [`deploy/unraid/`](deploy/unraid/).
 - Reference implementations from the share's reorganization: [`reference/scripts/`](reference/scripts/).
 
 Out of scope: stacking and processing (a separate Siril stacking app).

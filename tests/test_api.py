@@ -254,3 +254,9 @@ def test_start_over_never_deletes_the_last_copy_of_a_frame(tmp_path):
     assert staged[0].is_file() and not any(p.is_file() for p in staged[1:])      # only the last copy stays
     assert res["kept_staged"] == [f"local/{gone.relative_to(air).as_posix()}"]
     assert "KEPT" in open(res["log"]).read()
+
+
+def test_health_without_the_device(tmp_path):
+    # the container's healthcheck: never waits on the (often switched off) ASIAIR
+    client, air, root = make_app(tmp_path)
+    assert client.get("/health", params={"device": "0"}).json() == {"status": "ok", "version": VERSION}

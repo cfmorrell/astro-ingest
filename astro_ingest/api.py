@@ -79,7 +79,9 @@ def create_app(cfg: Config) -> FastAPI:
         return out
 
     @app.get("/health")
-    def health():
+    def health(device: bool = Query(True)):
+        if not device:   # the container's healthcheck: the app itself, not the (often switched off) ASIAIR
+            return {"status": "ok", "version": VERSION}
         try:
             src = service.open_source(cfg)
             label, online = src.label, True
