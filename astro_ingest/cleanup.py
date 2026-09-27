@@ -289,7 +289,7 @@ def run(cfg: Config, planned, cleanup_id: str, progress: Callable[..., None] = l
     cfg.check_writable(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    progress(0, "listing the device")
+    progress(0, "listing the device", phase="list")
     before = _listing(source)
     now = time.time() if now is None else now
     recent = sorted(r for r, (_, m) in before.items() if asiair.folder_category(r) == "handled" and now - m < RECENT_S)
@@ -300,23 +300,41 @@ def run(cfg: Config, planned, cleanup_id: str, progress: Callable[..., None] = l
                 "recent": recent[:10], "deleted": 0}
     ops = db.cleanup_ops(cfg, cleanup_id)
     db.set_cleanup(cfg, cleanup_id, "running")
+    pending = [o for o in ops if o["status"] == "pending"]
     frame_ok: dict[str, bool] = {}          # a thumbnail follows its frame: kept if the frame was kept
     deleted, freed = [], 0
     with open(log_path, "a") as log:
-        for n, o in enumerate(ops, 1):
-            if o["status"] != "pending":
-                continue
-            progress(n / len(ops) * 100, f"{o['rel']} ({n}/{len(ops)})")
-            status, detail = _one(cfg, source, o, before, frame_ok)
+        def record(o: dict, status: str, detail: str) -> None:
             db.set_cleanup_op(cfg, o["id"], status, detail)
             log.write(f"{ {'deleted': 'OK', 'gone': 'OK', 'skipped': 'SKIP'}.get(status, 'FAIL') }\t{o['kind']}\t"
                       f"{o['rel']}\t{status}: {detail}\n")
             log.flush()
+
+        # stage 2: every gate for every file, before anything is deleted
+        passed = []
+        for n, o in enumerate(pending, 1):
+            progress(n / len(pending) * 100, f"checking {o['rel']} ({n}/{len(pending)})",
+                     phase="check", phase_done=n, phase_total=len(pending), listed=len(before))
+            status, detail = _check(cfg, o, before, frame_ok)
+            if status == "ok":
+                passed.append(o)
+            else:
+                record(o, status, detail)
+        # stage 3: delete what passed
+        for n, o in enumerate(passed, 1):
+            progress(n / len(passed) * 100, f"deleting {o['rel']} ({n}/{len(passed)})",
+                     phase="delete", phase_done=n, phase_total=len(passed), checked=len(pending), listed=len(before))
+            if o["kind"] == "thumb" and frame_ok.get(asiair.fit_for_thumb(o["rel"])) is False:
+                record(o, "skipped", "its frame was kept")
+                continue
+            status, detail = _delete(source, o, frame_ok)
+            record(o, status, detail)
             if status == "deleted":
                 deleted.append(o["rel"])
                 freed += o["size"]
         pruned = _prune(source, {o["rel"] for o in ops}, log)
-    progress(100, "listing the device again")
+    progress(100, "listing the device again", phase="confirm", deleted=len(deleted), checked=len(pending),
+             listed=len(before))
     after = _listing(source)
     ops = db.cleanup_ops(cfg, cleanup_id)
     gone_ok = {o["rel"] for o in ops if o["status"] in ("deleted", "gone")}
@@ -328,14 +346,16 @@ def run(cfg: Config, planned, cleanup_id: str, progress: Callable[..., None] = l
               "skipped": [{"rel": o["rel"], "detail": o["detail"]} for o in ops if o["status"] == "skipped"],
               "failed": [{"rel": o["rel"], "detail": o["detail"]} for o in ops if o["status"] == "failed"],
               "pruned": pruned, "unexpected_missing": unexpected, "still_there": still_there,
-              "new_files": len(set(after) - set(before)), "seconds": round(time.monotonic() - started, 1),
+              "new_files": len(set(after) - set(before)), "listed": len(before), "listed_after": len(after),
+              "seconds": round(time.monotonic() - started, 1),
               "log": str(log_path)}
     ok = not result["failed"] and not unexpected and not still_there
     db.set_cleanup(cfg, cleanup_id, "done" if ok else "failed", db.cleanup(cfg, cleanup_id)["summary"] | {"result": result})
     return result
 
 
-def _one(cfg: Config, source, o: dict, before: dict, frame_ok: dict) -> tuple[str, str]:
+def _check(cfg: Config, o: dict, before: dict, frame_ok: dict) -> tuple[str, str]:
+    """Every gate for one file, before anything is deleted: ("ok", "") or (status, why)."""
     rel = o["rel"]
     if o["kind"] == "thumb":
         fit = asiair.fit_for_thumb(rel)
@@ -356,6 +376,11 @@ def _one(cfg: Config, source, o: dict, before: dict, frame_ok: dict) -> tuple[st
     if o["kind"] != "thumb" and o["group"] == "verified" and not o["nas"]:
         frame_ok[rel] = False
         return "skipped", "no NAS copy recorded"
+    return "ok", ""
+
+
+def _delete(source, o: dict, frame_ok: dict) -> tuple[str, str]:
+    rel = o["rel"]
     try:
         source.delete(rel)
     except (OSError, DeleteRefused) as e:

@@ -47,8 +47,8 @@ const state = {
   catalogPreview: null,  // /api/catalog/preview: what the Catalog step would write
   catalogRunning: false,
   cleanPreview: null,    // /api/cleanup/preview: what Clean up may delete from the device, by group
-  cleanUnticked: new Set(),  // files in default-ticked groups that Chris unticked
-  cleanTicked: new Set(),    // callout files Chris ticked
+  cleanTicked: new Set(),    // files ticked on Clean up (nothing is ticked for you)
+  cleanDone: null,           // the last Clean up run's result: its Done panel stays until dismissed
   cleanRunning: false,
   plan: null,
   batches: [],           // recent copy batches (newest first)
@@ -467,6 +467,84 @@ function stepStatus(step) {
   }
 }
 
+function stepDone(step) {
+  // has this step's own action been done (so Next is the thing to do now)?
+  const p = state.plan;
+  switch (step) {
+    case "connect": return !!(state.health && state.health.source_online);
+    case "scan": return !!p && selectedItems().length > 0;
+    case "stage": return !!p && selectedItems().length > 0 && selectedItems().every((i) => i.staged);
+    case "review": return !!p && p.summary.decisions_open === 0;
+    case "copy": return state.passed.has("copy") || (!!state.copyPreview && !state.copyPreview.copies && catalogAvailable());
+    case "catalog": return !!state.catalogPreview && !state.catalogPreview.summary.writes && !state.catalogPreview.summary.batches.length;
+    default: return false;
+  }
+}
+
+function renderStepBar() {
+  // Proposal A: the step's status on the left; Next (or Clean up's Delete) always in the same place
+  const step = state.activeStep;
+  const status = document.getElementById("stepbar-status");
+  const why = document.getElementById("stepbar-why");
+  const next = document.getElementById("stepbar-next");
+  const del = document.getElementById("stepbar-delete");
+  const p = state.plan;
+  const b = (t) => el("b", {}, [t]);
+  status.innerHTML = "";
+  why.textContent = "";
+  next.style.display = step === "clean" ? "none" : "inline-block";
+  del.style.display = step === "clean" ? "inline-block" : "none";
+  const i = STEPS.indexOf(step);
+  if (step !== "clean") next.textContent = `Next: ${STEP_LABELS[STEPS[i + 1]]} →`;
+  let blocked = null;   // why Next can't be used yet
+  const parts = [];
+  if (step === "connect") {
+    const h = state.health;
+    const dv = state.devices;
+    const name = dv && dv.remembered ? (dv.remembered.nickname || dv.remembered.label) : null;
+    parts.push(h && h.source_online ? ["Connected to ", b(dv && dv.source_mode === "local" ? "a local folder" : name || "the ASIAIR")] : ["Not connected"]);
+    if (!(h && h.source_online)) blocked = "Connect to a device first";
+  } else if (step === "scan" && p) {
+    const sel = selectedItems();
+    const toRead = sel.filter((x) => !x.staged).reduce((a, x) => a + x.size, 0);
+    parts.push([b(`${sel.length} frame${sel.length === 1 ? "" : "s"}`), ` selected · ${gb(sel.reduce((a, x) => a + x.size, 0))}${toRead ? ` · ${roughTime(toRead)} over Wi-Fi` : ""}`]);
+  } else if (step === "stage" && p) {
+    const sel = selectedItems();
+    const staged = sel.filter((x) => x.staged).length;
+    parts.push(sel.length && staged === sel.length ? [b("Everything staged"), ` · ${sel.length} frame${sel.length === 1 ? "" : "s"}`] : [b(`${staged} of ${sel.length}`), " frames staged"]);
+    if (state.stageRunning) blocked = "Staging…";
+  } else if (step === "review" && p) {
+    const s = p.summary;
+    parts.push([b(`${s.copy_files} file${s.copy_files === 1 ? "" : "s"}`), ` to copy · ${gb(s.copy_bytes)}`, s.decisions_open ? ` · ${s.decisions_open} decision${s.decisions_open === 1 ? "" : "s"} open` : ""]);
+  } else if (step === "copy" && state.copyPreview) {
+    const pv = state.copyPreview;
+    parts.push(pv.copies ? [b(`${pv.copies} file${pv.copies === 1 ? "" : "s"}`), ` ready to copy · ${gb(pv.bytes)}`] : [b("Nothing left to copy")]);
+    if (state.copyRunning) blocked = "Copying…";
+    else if (!catalogAvailable()) blocked = "Copy something first";
+  } else if (step === "catalog" && state.catalogPreview) {
+    const s = state.catalogPreview.summary;
+    parts.push(s.writes ? [b(`${s.writes} catalog update${s.writes === 1 ? "" : "s"}`), " to write"] : [b("Catalog up to date")]);
+    if (state.catalogRunning) blocked = "Writing…";
+  } else if (step === "clean" && state.cleanPreview) {
+    const sel = cleanSelected();
+    const files = sel.reduce((a, x) => a + 1 + (x.thumb ? 1 : 0), 0);
+    const bytes = sel.reduce((a, x) => a + x.size, 0);
+    parts.push([b(`${files} file${files === 1 ? "" : "s"}`), ` ticked · ${gb(bytes)}`]);
+    const c = state.cleanPreview;
+    del.textContent = c.unfinished ? `Resume clean-up ${c.unfinished}` : files ? `Delete ${files} file${files === 1 ? "" : "s"} from ${deviceName(c)}` : "Delete…";
+    del.classList.toggle("armed", !!files || !!c.unfinished);
+    del.disabled = state.cleanRunning || !c.device_delete_allowed || (!files && !c.unfinished);
+    if (!c.device_delete_allowed) why.textContent = "Deleting is switched off (ALLOW_DEVICE_DELETE)";
+    else if (state.cleanRunning) why.textContent = "Working…";
+  }
+  (parts[0] || []).forEach((x) => status.appendChild(typeof x === "string" ? document.createTextNode(x) : x));
+  if (step !== "clean") {
+    next.disabled = !!blocked;
+    why.textContent = blocked && !/…$/.test(blocked) ? blocked : "";
+    next.classList.toggle("ready", !blocked && stepDone(step));
+  }
+}
+
 function goTo(step, from) {
   if (from) state.passed.add(from);
   state.activeStep = step;
@@ -474,6 +552,7 @@ function goTo(step, from) {
 }
 
 function renderStepper() {
+  renderStepBar();
   const stepper = document.getElementById("stepper");
   stepper.innerHTML = "";
   STEPS.forEach((step, i) => {
@@ -517,7 +596,6 @@ function renderConnect() {
   const body = document.getElementById("connect-body");
   body.innerHTML = "";
   if (!h) return;
-  setStepBadge("connect-status-badge", h.source_online ? "ok" : "danger", h.source_online ? "online" : "offline");
   const dv = state.devices;
   if (dv && dv.source_mode === "local") {
     body.appendChild(el("div", {}, ["Reading from a local folder (ASIAIR_ROOT): ", el("span", { class: "session-path" }, [dv.local_root])]));
@@ -565,6 +643,7 @@ function renderFindResult(res) {
 async function findDevices(full) {
   const btns = [document.getElementById("find-btn"), document.getElementById("find-all-btn")];
   btns.forEach((b) => { b.disabled = true; });
+  renderDevicePill(true);
   document.getElementById("find-result").innerHTML = "";
   document.getElementById("find-result").appendChild(el("div", { class: "hint" }, ["Searching…"]));
   try {
@@ -573,13 +652,17 @@ async function findDevices(full) {
     renderFindResult(res);
     await loadHealth();
   } catch (e) {
+    renderDevicePill();
     document.getElementById("find-result").innerHTML = "";
     document.getElementById("find-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
   }
   btns.forEach((b) => { b.disabled = false; });
 }
 
+const CAPTURE_FOLDERS = ["Autorun", "Plan"];  // the only folders ingested; everything else is listed for reference
+
 function renderScan() {
+  // Proposal D: the capture folders (with how many of their new frames are selected), then the rest, dimmed
   const p = state.plan;
   const body = document.getElementById("scan-body");
   body.innerHTML = "";
@@ -588,15 +671,29 @@ function renderScan() {
   const when = new Date(p.scanned_at);
   document.getElementById("scanned-at").textContent = isNaN(when.getTime()) ? "" : `Scanned ${when.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
   const byTop = {};
+  const stageable = p.stageable_actions || [];
   p.items.forEach((i) => {
     const top = i.src.includes("/") ? i.src.slice(0, i.src.indexOf("/")) : "(share root)";
-    byTop[top] = byTop[top] || { files: 0, bytes: 0 };
-    byTop[top].files += 1 + (i.thumb ? 1 : 0);
-    byTop[top].bytes += i.size + (i.thumb_size || 0);
+    const t = byTop[top] = byTop[top] || { files: 0, bytes: 0, frames: 0, fresh: 0, selected: 0 };
+    t.files += 1 + (i.thumb ? 1 : 0);
+    t.bytes += i.size + (i.thumb_size || 0);
+    if (isFrame(i)) t.frames += 1;
+    if (stageable.includes(i.action) || i.action === "excluded") t.fresh += 1;
+    if (stageable.includes(i.action)) t.selected += 1;
   });
-  const row = el("div", { class: "stat-row" }, []);
-  Object.keys(byTop).sort().forEach((top) => row.appendChild(stat(byTop[top].files, `${top} · ${gb(byTop[top].bytes)}`)));
-  body.appendChild(row);
+  const tile = (top, quiet) => {
+    const t = byTop[top];
+    const what = top === "(share root)" ? "files at the top of the share" : `${top} ${t.frames ? "frames" : "files"}`;
+    const kids = [el("div", { class: "num" }, [String(t.frames || t.files)]), el("div", { class: "lbl" }, [`${what} · ${gb(t.bytes)}`])];
+    if (!quiet) kids.push(el("div", { class: "sel" }, [t.fresh ? `${t.selected} of ${t.fresh} new selected` : "nothing new"]));
+    return el("div", { class: `stat${quiet ? " quiet" : ""}` }, kids);
+  };
+  const capture = CAPTURE_FOLDERS.filter((t) => byTop[t]);
+  const other = Object.keys(byTop).filter((t) => !CAPTURE_FOLDERS.includes(t)).sort();
+  body.appendChild(el("div", { class: "folder-groups" }, [
+    el("div", { class: "folder-group" }, [el("div", { class: "folder-group-h" }, ["Capture folders · ingested"]), el("div", { class: "stat-row" }, capture.map((t) => tile(t, false)))]),
+    other.length ? el("div", { class: "folder-group" }, [el("div", { class: "folder-group-h" }, ["Other folders · not ingested, never touched"]), el("div", { class: "stat-row" }, other.map((t) => tile(t, true)))]) : null,
+  ]));
 }
 
 // ---------- scan, part 2: choose which frames to read from the device ----------
@@ -761,9 +858,10 @@ function renderStage(live) {
   }
   const btn = document.getElementById("stage-run-btn");
   btn.textContent = live ? "Staging…" : toRead.length ? `Stage ${toRead.length} frame${toRead.length === 1 ? "" : "s"}` : "Everything selected is staged";
+  btn.classList.toggle("primary", !!(live || toRead.length));
   if (!state.stageRunning) btn.disabled = toRead.length === 0;
   setStepBadge("stage-status-badge", live ? "accent" : toRead.length ? "" : "ok", live ? "staging…" : toRead.length ? "not staged" : (selected.length ? "staged" : "nothing selected"));
-  document.getElementById("stage-next-btn").style.display = !live && selected.length && !toRead.length ? "inline-block" : "none";
+  renderStepBar();
 }
 
 async function watchStageJob(jobId) {
@@ -826,9 +924,8 @@ function renderCopy(live) {
   const btn = document.getElementById("copy-run-btn");
   btn.textContent = live ? "Copying…" : pv.unfinished_batch ? "Resume copy" : pv.copies ? `Approve & copy ${pv.copies} file${pv.copies === 1 ? "" : "s"}` : "Nothing to copy";
   if (!state.copyRunning) btn.disabled = !pv.copies && !pv.unfinished_batch;
-  const next = document.getElementById("copy-next-btn");
-  next.disabled = !catalogAvailable();
-  next.title = next.disabled ? "Copy something first: Catalog works on what was copied" : "";
+  btn.classList.toggle("primary", !!(live || pv.copies || pv.unfinished_batch));
+  renderStepBar();
   setStepBadge("copy-status-badge", live ? "accent" : pv.copies ? "" : "ok", live ? "copying…" : pv.unfinished_batch ? "interrupted" : pv.copies ? "awaiting approval" : "up to date");
 
   const dests = document.getElementById("copy-dests");
@@ -944,7 +1041,9 @@ function renderCatalog() {
   if (!state.catalogRunning) {
     btn.disabled = !s.writes && !s.batches.length;
     btn.textContent = s.writes ? `Write ${s.writes} catalog update${s.writes === 1 ? "" : "s"}` : s.batches.length ? "Mark as catalogued" : "Nothing to write";
+    btn.classList.toggle("primary", !!(s.writes || s.batches.length));
   }
+  renderStepBar();
   setStepBadge("catalog-status-badge", s.writes ? "" : "ok", s.writes ? "awaiting approval" : "up to date");
   if (!state.catalogRunning) {
     const prog = document.getElementById("catalog-progress");
@@ -1034,19 +1133,25 @@ async function runCatalog() {
 
 // ---------- clean up ----------
 
+// Clean up (proposal E): groups sorted by what can be done with them; nothing is ticked for you
+const CLEAN_SECTIONS = [
+  ["Ready to delete", "a checksum proves the NAS copy is identical", ["verified"]],
+  ["Needs a check first", "on the NAS, copied there before astro-ingest", ["to-verify"]],
+  ["Not on the NAS", "deleting these loses them", ["rejected", "left-out", "over-cap", "not-kept", "other", "orphan-thumb"]],
+  ["Stays on the device", "", ["differs", "not-copied", "blocked", "waiting", "never"]],
+];
+const QUICK_S_PER_FRAME = 0.15;   // measured 0.12 s per frame on the real ASIAIR over Wi-Fi (2026-09-27)
+
 function cleanSelected() {
   const c = state.cleanPreview;
   if (!c) return [];
   const out = [];
-  c.groups.filter((g) => g.selectable).forEach((g) => g.items.forEach((i) => {
-    if (g.ticked ? !state.cleanUnticked.has(i.rel) : state.cleanTicked.has(i.rel)) out.push(i);
-  }));
+  c.groups.filter((g) => g.selectable).forEach((g) => g.items.forEach((i) => { if (state.cleanTicked.has(i.rel)) out.push(i); }));
   return out;
 }
 
-function setCleanTick(group, rel, on) {
-  if (group.ticked) { if (on) state.cleanUnticked.delete(rel); else state.cleanUnticked.add(rel); }
-  else if (on) state.cleanTicked.add(rel); else state.cleanTicked.delete(rel);
+function setCleanTick(rel, on) {
+  if (on) state.cleanTicked.add(rel); else state.cleanTicked.delete(rel);
 }
 
 async function loadCleanStep() {
@@ -1055,12 +1160,13 @@ async function loadCleanStep() {
     state.cleanPreview = await api("GET", "/api/cleanup/preview");
   } catch (e) {
     setStepBadge("clean-status-badge", "danger", "error");
-    const box = document.getElementById("clean-summary");
+    const box = document.getElementById("clean-result");
     box.innerHTML = "";
     box.appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
     return;
   }
   renderCleanStep();
+  renderCleanResult(state.cleanDone);
   renderStepper();
 }
 
@@ -1068,119 +1174,185 @@ function deviceName(c) {
   return c.device ? `${c.device.nickname || c.device.label || "the ASIAIR"} (${c.device.host})` : c.source.replace(/^local:/, "");
 }
 
-function renderCleanStep(live) {
+function renderCleanStep() {
   const c = state.cleanPreview;
   if (!c) return;
+  document.getElementById("clean-title").textContent = `Clean up ${deviceName(c)}`;
   const sel = cleanSelected();
-  const selBytes = sel.reduce((a, i) => a + i.size, 0);
-  const selFiles = sel.reduce((a, i) => a + 1 + (i.thumb ? 1 : 0), 0);
-  const tv = c.to_verify;
-  const rate = (state.plan && state.plan.rate_mb_s) || 10;
-  const box = document.getElementById("clean-summary");
-  box.innerHTML = "";
-  const boxes = live && live.files_total !== undefined
-    ? [[live.eta_s !== null && live.eta_s !== undefined ? clock(live.eta_s) : "estimating…", "time remaining", "ok"],
-      [`${live.files_done} / ${live.files_total}`, "frames verified"], [`${gb(live.bytes_done)} / ${gb(live.bytes_total)}`, "read from the device"],
-      [live.mb_s ? `${live.mb_s} MB/s` : "…", "speed"]]
-    : [[String(selFiles), `files ticked · ${gb(selBytes)} to free`, selFiles ? "ok" : ""],
-      [String(tv.files), `frames to verify · ${gb(tv.bytes)}`],
-      [tv.files ? `~${clock(tv.bytes / 1e6 / rate)}` : "—", `to verify over Wi-Fi at ~${rate} MB/s`],
-      [String(c.uncatalogued_batches), "copy batches not catalogued yet"]];
-  box.appendChild(el("div", { class: "stat-row" }, boxes.map(([n, l, k]) => stat(n, l, k))));
-
-  const vbtn = document.getElementById("clean-verify-btn");
-  const rbtn = document.getElementById("clean-run-btn");
-  if (!state.cleanRunning) {
-    vbtn.disabled = !tv.files;
-    vbtn.textContent = tv.files ? `Verify ${tv.files} frame${tv.files === 1 ? "" : "s"} already on the NAS (${gb(tv.bytes)})` : "Nothing to verify";
-    rbtn.disabled = !c.device_delete_allowed || (!selFiles && !c.unfinished);
-    rbtn.textContent = c.unfinished ? `Resume clean-up ${c.unfinished}` : `Delete ${selFiles} file${selFiles === 1 ? "" : "s"} (${gb(selBytes)}) from ${deviceName(c)}`;
-  }
-  setStepBadge("clean-status-badge", live ? "accent" : c.device_delete_allowed ? (selFiles ? "" : "ok") : "warn",
-    live ? "working…" : !c.device_delete_allowed ? "deleting is switched off" : selFiles ? "awaiting approval" : "nothing ticked");
+  setStepBadge("clean-status-badge", state.cleanRunning ? "accent" : !c.device_delete_allowed ? "warn" : "",
+    state.cleanRunning ? "working…" : !c.device_delete_allowed ? "deleting is switched off" : sel.length ? `${sel.length} ticked` : "nothing ticked");
+  document.getElementById("clean-recommended-btn").disabled = state.cleanRunning ||
+    !c.groups.some((g) => g.recommended && g.selectable && g.items.some((i) => !state.cleanTicked.has(i.rel)));
   const guard = document.getElementById("clean-guard");
   guard.innerHTML = "";
   if (!c.device_delete_allowed) guard.appendChild(el("div", { class: "session-mismatch-warning" }, [
     "⚠ Deleting from the device is switched off (ALLOW_DEVICE_DELETE is not 1). Everything else on this page works; nothing can be deleted until it's switched on."]));
-  if (c.uncatalogued_batches) guard.appendChild(el("div", { class: "hint" }, [
-    `${c.uncatalogued_batches} copy batch${c.uncatalogued_batches === 1 ? " hasn't" : "es haven't"} been catalogued yet (Catalog step). That doesn't block clean-up.`]));
 
+  const byId = Object.fromEntries(c.groups.map((g) => [g.id, g]));
   const list = document.getElementById("clean-groups");
   list.innerHTML = "";
-  c.groups.forEach((g) => {
-    const inGroup = g.items.filter((i) => (g.ticked ? !state.cleanUnticked.has(i.rel) : state.cleanTicked.has(i.rel)));
-    const header = el("div", { class: "card-header" }, [
-      el("div", { style: "display:flex; gap:10px; align-items:center; flex-wrap:wrap;" }, [
-        g.selectable ? el("input", {
-          type: "checkbox", checked: inGroup.length === g.items.length && g.items.length ? "" : null,
-          title: "tick or untick every file in this group",
-          onchange: (e) => { g.items.forEach((i) => setCleanTick(g, i.rel, e.target.checked)); renderCleanStep(); },
-        }, []) : null,
-        el("div", { class: "card-title" }, [g.label]),
-        g.recommended ? el("span", { class: "badge ok" }, ["recommended"]) : null,
-        el("span", { class: `badge ${g.selectable ? (g.recommended ? "ok" : "warn") : ""}` }, [`${g.files} file${g.files === 1 ? "" : "s"} · ${gb(g.bytes)}`]),
-        g.selectable ? el("span", { class: "hint", style: "margin:0;" }, [`${inGroup.length} of ${g.items.length} ticked`]) : null,
-      ]),
-    ]);
-    const body = [header];
-    if (g.note) body.push(el("p", { class: "hint", style: "margin-top:0;" }, [g.note]));
-    if (g.items.length) {
-      body.push(toggleList(`show ${g.items.length} item${g.items.length === 1 ? "" : "s"}`, g.items.map((i) => el("label", {
-        style: "display:flex; gap:8px; align-items:baseline;", title: i.how || "",
-      }, [
-        g.selectable ? el("input", { type: "checkbox", checked: inGroup.includes(i) ? "" : null,
-          onchange: (e) => { setCleanTick(g, i.rel, e.target.checked); renderCleanStep(); } }, []) : null,
-        el("span", { class: "session-path" }, [i.rel + (i.thumb ? "  + thumbnail" : "")]),
-        i.nas.length ? el("span", { class: "hint", style: "margin:0;" }, [`NAS: ${i.nas[0]}`]) : (i.how ? el("span", { class: "hint", style: "margin:0;" }, [i.how]) : null),
-      ]))));
-    }
-    list.appendChild(el("div", { class: "card" }, body));
+  CLEAN_SECTIONS.forEach(([title, note, ids]) => {
+    const groups = ids.map((id) => byId[id]).filter(Boolean);
+    if (!groups.length) return;
+    list.appendChild(el("div", { class: "clean-section-h" }, [el("span", { class: "t" }, [title]), note ? el("span", { class: "hint", style: "margin:0;" }, [note]) : null]));
+    groups.forEach((g) => list.appendChild(cleanGroup(c, g)));
   });
+  if (!c.groups.length) list.appendChild(el("div", { class: "empty-hint" }, ["Nothing on the device to clean up."]));
+  renderStepBar();
+}
+
+function cleanGroup(c, g) {
+  const ticked = g.items.filter((i) => state.cleanTicked.has(i.rel));
+  const frames = g.items.filter((i) => i.thumb).length;
+  const count = g.id === "never" ? `${g.files} file${g.files === 1 ? "" : "s"}`
+    : frames ? `${g.items.length} frame${g.items.length === 1 ? "" : "s"}${frames ? " + thumbnails" : ""}` : `${g.files} file${g.files === 1 ? "" : "s"}`;
+  const top = el("div", { class: "top" }, [
+    g.selectable ? el("input", {
+      type: "checkbox", "aria-label": `tick every file in ${g.label}`,
+      checked: ticked.length === g.items.length && g.items.length ? "" : null,
+      disabled: state.cleanRunning ? "" : null,
+      onchange: (e) => { g.items.forEach((i) => setCleanTick(i.rel, e.target.checked)); renderCleanStep(); },
+    }, []) : null,
+    el("span", { class: "t" }, [g.label]),
+    g.recommended ? el("span", { class: "badge ok" }, ["recommended"]) : null,
+    el("span", { class: "num" }, [`${count} · ${gb(g.bytes)}`]),
+    g.selectable && ticked.length && ticked.length < g.items.length ? el("span", { class: "hint", style: "margin:0;" }, [`${ticked.length} of ${g.items.length} ticked`]) : null,
+  ]);
+  const body = [top];
+  if (g.note && !/^not on the NAS/.test(g.note)) body.push(el("div", { class: "hint", style: "margin:4px 0 0;" }, [g.note]));   // the section already says it
+  if (g.id === "to-verify") body.push(checkControls(c, g));
+  if (g.items.length) {
+    body.push(toggleList(`show ${g.items.length} item${g.items.length === 1 ? "" : "s"}`, g.items.map((i) => el("label", { title: i.how || "" }, [
+      g.selectable ? el("input", { type: "checkbox", checked: state.cleanTicked.has(i.rel) ? "" : null, disabled: state.cleanRunning ? "" : null,
+        onchange: (e) => { setCleanTick(i.rel, e.target.checked); renderCleanStep(); } }, []) : null,
+      el("span", { class: "session-path" }, [i.rel + (i.thumb ? "  + thumbnail" : "")]),
+      i.nas.length ? el("span", { class: "hint", style: "margin:0;" }, [`NAS: ${i.nas[0]}`]) : (i.how ? el("span", { class: "hint", style: "margin:0;" }, [i.how]) : null),
+    ]))));
+  }
+  return el("div", { class: "clean-group" }, body);
+}
+
+function checkControls(c, g) {
+  // "Needs a check first": the Check buttons sit next to what they apply to (proposal E, G)
+  const n = g.items.length;
+  const rate = (state.plan && state.plan.rate_mb_s) || 10;
+  const quick = clock(n * QUICK_S_PER_FRAME);
+  const thorough = clock(c.to_verify.bytes / 1e6 / rate);
+  const box = el("div", { style: "display:grid; gap:6px; margin:8px 0 4px;" }, []);
+  box.appendChild(el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap;" }, [
+    el("button", { disabled: state.cleanRunning ? "" : null, onclick: () => runCleanVerify("quick") }, [`Check ${n} frame${n === 1 ? "" : "s"} · about ${quick}`]),
+    el("button", { class: "small", disabled: state.cleanRunning ? "" : null, onclick: () => runCleanVerify("thorough") }, [`Thorough · reads every byte, about ${thorough}`]),
+  ]));
+  box.appendChild(el("div", { class: "hint", style: "margin:0;" }, [
+    "The check compares each frame's size, FITS header and 8 slices spread through the image with its NAS copy. Thorough reads every byte over Wi-Fi. Checked frames move up to Ready to delete."]));
+  const live = el("div", { id: "clean-check-live" }, []);
+  box.appendChild(live);
+  return box;
+}
+
+const CLEAN_PHASES = [
+  ["list", "Listing the device", (st) => `Listed the device: ${st.listed ?? "every"} file${st.listed === 1 ? "" : "s"}`],
+  ["check", "Checking every ticked file and its NAS copy", (st) => `Checked ${st.checked ?? st.phase_total ?? ""} file${st.checked === 1 ? "" : "s"}`],
+  ["delete", null, (st) => `Deleted ${st.deleted ?? ""} file${st.deleted === 1 ? "" : "s"}`],
+  ["confirm", "Listing the device again to confirm", () => "Listed the device again"],
+];
+
+function renderCleanActivity(snap) {
+  // Delete progress as its four stages, each with its own count (proposal E); a check shows its own bar
+  const box = document.getElementById("clean-activity");
+  const st = (snap && snap.stats) || {};
+  const pct = snap ? Math.min(100, Math.max(0, snap.percent_complete || 0)) : 0;
+  if (snap && snap.kind === "verify") {
+    box.innerHTML = "";
+    const live = document.getElementById("clean-check-live");
+    if (!live) return;
+    live.innerHTML = "";
+    live.appendChild(el("div", { class: "progress-bar" }, [el("div", { class: "progress-fill", style: `width:${pct.toFixed(0)}%` }, [])]));
+    live.appendChild(el("div", { class: "hint", style: "margin:4px 0 0;" }, [
+      st.files_total !== undefined ? `Checked ${st.files_done} of ${st.files_total}${st.eta_s !== null && st.eta_s !== undefined ? ` · about ${clock(st.eta_s)} left` : ""}` : "Starting…"]));
+    return;
+  }
+  box.innerHTML = "";
+  if (!snap) return;
+  const order = CLEAN_PHASES.map((x) => x[0]);
+  const at = order.indexOf(st.phase || "list");
+  const dev = deviceName(state.cleanPreview);
+  box.appendChild(el("div", { class: "phases" }, CLEAN_PHASES.map(([id, doing, did], n) => {
+    const cls = n < at ? "done" : n === at ? "now" : "todo";
+    const label = n < at ? did(st) : (doing || `Deleting from ${dev}`);
+    const count = n === at && st.phase_total ? `${st.phase_done} / ${st.phase_total}` : "";
+    return el("div", { class: `phase ${cls}` }, [el("span", { class: "i" }, [cls === "done" ? "✓" : cls === "now" ? "●" : "○"]), el("span", {}, [label]), el("span", { class: "c" }, [count])]);
+  })));
+  box.appendChild(el("div", { class: "progress-bar" }, [el("div", { class: "progress-fill", style: `width:${(st.phase_total ? (st.phase_done / st.phase_total) * 100 : pct).toFixed(0)}%` }, [])]));
 }
 
 function renderCleanResult(res) {
+  // The Done panel stays up until dismissed (proposal E)
   const box = document.getElementById("clean-result");
   box.innerHTML = "";
   if (!res) return;
-  if (res.stopped) { box.appendChild(el("div", { class: "session-mismatch-warning" }, [`⚠ ${res.stopped}`])); return; }
-  if (res.verified !== undefined) {
-    box.appendChild(el("div", { class: "hint" }, [`Verified ${res.verified} frame${res.verified === 1 ? "" : "s"}` +
-      `${res.mismatch ? `, ${res.mismatch} differ from the NAS copy` : ""}${res.nas_missing ? `, ${res.nas_missing} NAS cop${res.nas_missing === 1 ? "y" : "ies"} not found` : ""}; read ${gb(res.bytes)} in ${clock(res.seconds)}.`]));
+  const dev = state.cleanPreview ? deviceName(state.cleanPreview) : "the device";
+  const ok = el("button", { class: "small", onclick: () => { state.cleanDone = null; renderCleanResult(null); } }, ["OK"]);
+  if (res.stopped) {
+    box.appendChild(el("div", { class: "done-panel stopped" }, [el("div", { class: "h" }, ["Nothing deleted"]), el("div", {}, [res.stopped]), el("div", {}, [ok])]));
     return;
   }
-  box.appendChild(el("div", { class: "hint" }, [
-    `Clean-up ${res.cleanup}: ${res.deleted} file${res.deleted === 1 ? "" : "s"} deleted (${gb(res.bytes_freed)} freed)${res.already_gone ? `, ${res.already_gone} already gone` : ""}, ${res.skipped.length} skipped, ${res.failed.length} failed${res.pruned.length ? `, ${res.pruned.length} empty folder${res.pruned.length === 1 ? "" : "s"} removed` : ""}. The device was listed again afterwards: ${res.unexpected_missing.length || res.still_there.length ? "see below" : "exactly the deleted files are gone"}. Log: `, logLink(res.log)]));
-  const rows = (label, items, cls) => items.length && box.appendChild(el("div", { class: cls }, [`${label}:`, ...items.map((r) => el("div", { class: "session-path" }, [typeof r === "string" ? r : `${r.rel} — ${r.detail}`]))]));
-  rows("Failed", res.failed, "error-banner");
-  rows("Missing but not deleted by this run", res.unexpected_missing, "error-banner");
-  rows("Still on the device after deleting", res.still_there, "error-banner");
-  rows("Kept (a gate didn't pass)", res.skipped, "session-mismatch-warning");
+  if (res.verified !== undefined) {
+    const bad = res.mismatch || res.nas_missing || res.read_errors;
+    box.appendChild(el("div", { class: `done-panel${bad ? " problem" : ""}` }, [
+      el("div", { class: "h" }, [`${bad ? "Checked, with differences:" : "✓ Checked"} ${res.verified} frame${res.verified === 1 ? "" : "s"} match their NAS copies`]),
+      el("div", {}, [`${res.method === "thorough" ? "Thorough check (every byte)" : "Quick check"} · read ${gb(res.bytes)} in ${clock(res.seconds)}` +
+        `${res.mismatch ? ` · ${res.mismatch} differ from the NAS copy (not offered for deletion)` : ""}${res.nas_missing ? ` · ${res.nas_missing} NAS cop${res.nas_missing === 1 ? "y" : "ies"} not found` : ""}` +
+        `${res.read_errors ? ` · ${res.read_errors} couldn't be read` : ""}. Matching frames are now under Ready to delete.`]),
+      el("div", {}, [ok]),
+    ]));
+    return;
+  }
+  const bad = res.failed.length || res.unexpected_missing.length || res.still_there.length;
+  const panel = el("div", { class: `done-panel${bad ? " problem" : ""}` }, [
+    el("div", { class: "h" }, [bad ? `Deleted ${res.deleted} file${res.deleted === 1 ? "" : "s"} from ${dev}, with problems` : `✓ Deleted ${res.deleted} file${res.deleted === 1 ? "" : "s"} (${gb(res.bytes_freed)}) from ${dev}`]),
+    el("div", {}, [
+      `${res.pruned.length ? `${res.pruned.length} empty folder${res.pruned.length === 1 ? "" : "s"} removed (${res.pruned.join(", ")}) · ` : ""}` +
+      `${res.already_gone ? `${res.already_gone} already gone · ` : ""}${res.skipped.length ? `${res.skipped.length} kept (a check didn't pass) · ` : ""}` +
+      `finished ${new Date().toLocaleTimeString(undefined, { timeStyle: "short" })} in ${clock(res.seconds)}. ` +
+      (bad ? "The device listing afterwards doesn't match what was deleted: see below." : "The device was listed again afterwards: exactly these files are gone and nothing else changed."),
+    ]),
+  ]);
+  const rows = (label, items) => items.length && panel.appendChild(el("div", {}, [`${label}:`, ...items.map((r) => el("div", { class: "session-path" }, [typeof r === "string" ? r : `${r.rel} — ${r.detail}`]))]));
+  rows("Failed", res.failed);
+  rows("Missing but not deleted by this run", res.unexpected_missing);
+  rows("Still on the device after deleting", res.still_there);
+  rows("Kept (a check didn't pass)", res.skipped);
+  panel.appendChild(el("div", { style: "display:flex; gap:12px; align-items:center;" }, ["Log: ", logLink(res.log), ok]));
+  box.appendChild(panel);
 }
 
-async function watchCleanJob(jobId) {
+async function watchCleanJob(jobId, kind) {
   state.cleanRunning = true;
-  document.getElementById("clean-verify-btn").disabled = true;
-  document.getElementById("clean-run-btn").disabled = true;
-  await pollJob(jobId, document.getElementById("clean-progress"), async (snap) => {
+  state.cleanDone = null;
+  renderCleanResult(null);
+  renderCleanStep();
+  const holder = el("div", { style: "display:none;" }, [el("div", { class: "progress-fill" }, []), el("span", { class: "pct" }, []), el("span", { class: "msg" }, [])]);
+  await pollJob(jobId, holder, async (snap) => {
     state.cleanRunning = false;
-    if (snap.status === "succeeded") { renderCleanResult(snap.result); if (snap.result.cleanup) state.passed.add("clean"); }
-    else {
-      document.getElementById("clean-result").innerHTML = "";
-      document.getElementById("clean-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "failed"]));
+    renderCleanActivity(null);
+    state.cleanTicked.clear();   // after a run nothing stays ticked (proposal E)
+    if (snap.status === "succeeded") {
+      state.cleanDone = snap.result;
+      if (snap.result.cleanup) state.passed.add("clean");
+    } else {
+      state.cleanDone = { stopped: snap.error || "failed" };
     }
-    state.cleanUnticked.clear();
-    state.cleanTicked.clear();
     await loadPlan(false);
     await loadCleanStep();
-  }, (snap) => renderCleanStep(snap.stats));
+    renderCleanResult(state.cleanDone);
+  }, (snap) => renderCleanActivity(Object.assign({ kind }, snap)));
 }
 
-async function runCleanVerify() {
-  const tv = state.cleanPreview.to_verify;
-  if (!confirm(`Read ${tv.files} frame${tv.files === 1 ? "" : "s"} (${gb(tv.bytes)}) from the device once and compare each with its NAS copy? Nothing is deleted or changed.`)) return;
+async function runCleanVerify(method) {
   try {
-    const { job_id } = await api("POST", "/api/cleanup/verify");
-    await watchCleanJob(job_id);
+    const { job_id } = await api("POST", "/api/cleanup/verify", { method });
+    await watchCleanJob(job_id, "verify");
   } catch (e) {
     document.getElementById("clean-result").innerHTML = "";
     document.getElementById("clean-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
@@ -1202,7 +1374,7 @@ async function runCleanDelete() {
   if (!confirm(what)) return;
   try {
     const { job_id } = await api("POST", "/api/cleanup/run", { selected: sel.map((i) => i.rel) });
-    await watchCleanJob(job_id);
+    await watchCleanJob(job_id, "cleanup");
   } catch (e) {
     document.getElementById("clean-result").innerHTML = "";
     document.getElementById("clean-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
@@ -1274,13 +1446,14 @@ function decisionChips(d) {
   const isChosen = (o) => o.value === d.resolved || (isNew(o.value) && isNew(d.resolved));
   const wrap = el("div", {}, []);
   const nameRow = el("div", { class: "field-row", style: "display:none; align-items:center; margin:-4px 0 10px;" }, []);
-  const chips = el("div", { class: "checklist" }, d.options.map((o) => {
+  const chips = el("div", { class: "seg", role: "radiogroup" }, d.options.map((o) => {
     const chosenName = isChosen(o) && isNew(d.resolved) ? d.resolved.slice(4) : "";
     const label = o.label + (isNew(o.value) && (chosenName || o.value.length > 4) ? ` (${chosenName || o.value.slice(4)})` : "");
-    return el("label", {
-      class: `chip${isChosen(o) ? " checked" : ""}`,
+    return el("button", {
+      type: "button", role: "radio", "aria-checked": isChosen(o) ? "true" : "false",
+      class: isChosen(o) ? "on" : "",
       onclick: (e) => {
-        e.preventDefault();
+        e.stopPropagation();
         if (isNew(o.value)) {
           // a new target needs its folder name: ask for it inline
           nameRow.style.display = "flex";
@@ -1289,10 +1462,7 @@ function decisionChips(d) {
         }
         if (o.value !== d.resolved || d.answer === null) answerDecision(d, o.value);
       },
-    }, [
-      el("input", Object.assign({ type: "radio", name: d.id }, isChosen(o) ? { checked: "checked" } : {}), []),
-      label,
-    ]);
+    }, [isChosen(o) ? `✓ ${label}` : label]);
   }));
   const newOpt = d.options.find((o) => isNew(o.value));
   if (newOpt) {
@@ -1490,7 +1660,7 @@ async function resumeRunningJob() {
     const copying = jobsNow.find((j) => j.kind === "copy" && j.status === "running");
     if (copying) { state.activeStep = "copy"; showActiveStep(); await watchCopyJob(copying.id); }
     const cleaning = jobsNow.find((j) => (j.kind === "cleanup" || j.kind === "verify") && j.status === "running");
-    if (cleaning) { state.activeStep = "clean"; showActiveStep(); await watchCleanJob(cleaning.id); }
+    if (cleaning) { state.activeStep = "clean"; showActiveStep(); await watchCleanJob(cleaning.id, cleaning.kind); }
     const cataloguing = jobsNow.find((j) => j.kind === "catalog" && j.status === "running");
     if (cataloguing) { state.activeStep = "catalog"; showActiveStep(); await watchCatalogJob(cataloguing.id); }
     const running = jobsNow.find((j) => j.kind === "quality" && j.status === "running");
@@ -1513,21 +1683,45 @@ function applyPlan(plan) {
 }
 
 async function loadHealth() {
+  const banner = document.getElementById("app-banner");
   try {
     state.devices = state.devices || await api("GET", "/api/devices");
     state.health = await api("GET", "/health");
-    setStepBadge("health-badge", state.health.status === "ok" ? "ok" : "danger", state.health.status === "ok" ? "online" : "error");
+    banner.style.display = "none";
     if (state.health.version) document.getElementById("app-version").textContent = `v${state.health.version}`;
-    const src = document.getElementById("source-badge");
-    const dv = state.devices;
-    const who = dv && dv.source_mode === "local" ? "local folder" : (dv && dv.remembered ? (dv.remembered.nickname || dv.remembered.label) : "ASIAIR");
-    src.textContent = `${who}: ${state.health.source_online ? "online" : "offline"}`;
-    src.className = `badge ${state.health.source_online ? "ok" : "warn"}`;
-    src.title = state.health.source;
   } catch (e) {
-    setStepBadge("health-badge", "danger", "offline");
+    // the app itself isn't answering: say so across the top (you only see this when something is wrong)
+    banner.textContent = "✕ Can't reach the astro-ingest server. Check that it's running, then reload this page.";
+    banner.style.display = "flex";
   }
+  renderDevicePill();
   renderConnect();
+}
+
+function renderDevicePill(searching) {
+  // One indicator (proposal B): the device you're connected to, with a coloured dot
+  const pill = document.getElementById("device-pill");
+  const dot = pill.querySelector(".dot");
+  const text = pill.querySelector(".pill-text");
+  const h = state.health;
+  const dv = state.devices;
+  pill.querySelectorAll(".ip").forEach((n) => n.remove());
+  let cls = "", label = "Not connected", ip = null;
+  if (searching) { cls = "warn"; label = "Searching the network…"; }
+  else if (dv && dv.source_mode === "local") {
+    cls = h && h.source_online ? "ok" : "danger";
+    label = `Local folder ${dv.local_root ? basename(dv.local_root) : ""}`;
+  } else if (dv && dv.remembered) {
+    const name = dv.remembered.nickname || dv.remembered.label || "ASIAIR";
+    ip = dv.remembered.host;
+    if (h && h.source_online) { cls = "ok"; label = name; }
+    else if (h) { cls = "danger"; label = `${name} isn't answering`; }
+    else { label = name; }
+  }
+  dot.className = `dot${cls ? ` ${cls}` : ""}`;
+  text.textContent = label;
+  if (ip) pill.appendChild(el("span", { class: "ip" }, [ip]));
+  pill.title = h ? h.source : "";
 }
 
 async function loadPlan(refresh) {
@@ -1555,17 +1749,19 @@ document.getElementById("rescan-btn").addEventListener("click", async (e) => {
   await loadPlan(true);
   e.target.disabled = false;
 });
-document.getElementById("connect-next-btn").addEventListener("click", () => goTo("scan", "connect"));
-document.getElementById("select-next-btn").addEventListener("click", () => goTo("stage", "scan"));
-document.getElementById("stage-next-btn").addEventListener("click", () => goTo("review", "stage"));
+document.getElementById("stepbar-next").addEventListener("click", () => {
+  const i = STEPS.indexOf(state.activeStep);
+  if (i < STEPS.length - 1) goTo(STEPS[i + 1], state.activeStep);
+});
+document.getElementById("stepbar-delete").addEventListener("click", () => runCleanDelete());
+document.getElementById("clean-recommended-btn").addEventListener("click", () => {
+  (state.cleanPreview ? state.cleanPreview.groups : []).filter((g) => g.recommended && g.selectable)
+    .forEach((g) => g.items.forEach((i) => state.cleanTicked.add(i.rel)));
+  renderCleanStep();
+});
 document.getElementById("stage-run-btn").addEventListener("click", runStage);
 document.getElementById("copy-run-btn").addEventListener("click", runCopy);
 document.getElementById("catalog-run-btn").addEventListener("click", runCatalog);
-document.getElementById("catalog-next-btn").addEventListener("click", () => goTo("clean", "catalog"));
-document.getElementById("clean-verify-btn").addEventListener("click", runCleanVerify);
-document.getElementById("clean-run-btn").addEventListener("click", runCleanDelete);
-document.getElementById("review-next-btn").addEventListener("click", () => goTo("copy", "review"));
-document.getElementById("copy-next-btn").addEventListener("click", () => goTo("catalog", "copy"));
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
 document.getElementById("find-btn").addEventListener("click", () => findDevices(false));

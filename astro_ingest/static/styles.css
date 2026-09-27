@@ -1438,3 +1438,231 @@ button.danger-outline:hover {
   color: var(--text-muted);
   margin-bottom: 0;
 }
+
+/* ---------- buttons (Chris, 2026-09-27, proposal A): five kinds, used the same way on every step ----------
+ * main action: button.primary (one filled button per screen) · secondary: plain button (visible edge; .ghost
+ * now looks the same, never see-through) · choice: .seg · destructive: button.danger (.armed once something is
+ * ticked) · next: button.next (outlined until the step's action is done, then .ready = filled). */
+:root { --border-strong: #3a4060; --button-bg: #1a1e2c; }
+
+button, button.ghost {
+  background: var(--button-bg);
+  border-color: var(--border-strong);
+}
+
+button.next {
+  background: transparent;
+  border: 1.5px solid var(--accent);
+  color: #a5b4fc;
+  font-weight: 600;
+}
+
+button.next.ready {
+  background: var(--accent);
+  color: #fff;
+}
+
+button.danger {
+  background: transparent;
+  border: 1.5px solid var(--danger);
+  color: #fca5a5;
+  font-weight: 600;
+}
+
+button.danger.armed {
+  background: var(--danger);
+  color: #fff;
+}
+
+button.danger:hover, button.next:hover {
+  filter: brightness(1.1);
+}
+
+.seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.seg button {
+  border: 0;
+  border-radius: 0;
+  font-size: 12.5px;
+  padding: 6px 12px;
+}
+
+.seg button + button {
+  border-left: 1px solid var(--border-strong);
+}
+
+.seg button.on {
+  background: rgba(99, 102, 241, 0.14);
+  color: #a5b4fc;
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* the step bar: pinned to the bottom of the window on every step, with the step's status and Next */
+.stepbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  background: #0f1220;
+  border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+  padding: 10px 24px calc(10px + env(safe-area-inset-bottom, 0px));
+}
+
+.stepbar-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stepbar-status {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.stepbar-status b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.stepbar-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+main {
+  padding-bottom: 110px;   /* room for the step bar */
+}
+
+/* header: one pill for the device (proposal B) */
+.pill {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12.5px;
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+
+.pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex: none;
+}
+
+.pill .dot.ok { background: var(--success); box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); }
+.pill .dot.warn { background: var(--warn); }
+.pill .dot.danger { background: var(--danger); }
+.pill .ip { color: var(--text-muted); font-family: ui-monospace, monospace; font-size: 11.5px; }
+
+.app-banner {
+  margin: 0;
+  border-radius: 0;
+  padding: 8px 24px;
+  justify-content: center;
+}
+
+/* Scan Images summary (proposal D): capture folders, then the rest dimmed */
+.folder-groups {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+.folder-group {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.folder-group + .folder-group {
+  border-left: 1px solid var(--border);
+  padding-left: 16px;
+}
+
+.folder-group-h {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.stat .sel { font-size: 11.5px; color: #a5b4fc; font-weight: 600; }
+.stat.quiet { background: transparent; border-style: dashed; }
+.stat.quiet .num { color: var(--text-muted); font-size: 16px; }
+
+/* Clean up (proposal E) */
+.clean-section-h {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 18px 0 8px;
+}
+
+.clean-section-h .t { font-weight: 700; font-size: 14.5px; }
+
+.clean-group {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  margin-bottom: 8px;
+}
+
+.clean-group .top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.clean-group .t { font-weight: 600; }
+.clean-group .num { color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.clean-group input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+.clean-group .file-list label { display: flex; gap: 8px; align-items: baseline; }
+
+.phases { display: grid; gap: 6px; font-size: 13px; margin: 12px 0 8px; }
+.phase { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; color: var(--text-muted); }
+.phase .i { text-align: center; }
+.phase.done .i { color: var(--success); }
+.phase.now { color: var(--text); font-weight: 600; }
+.phase.todo { color: var(--text-dim); }
+.phase .c { font-variant-numeric: tabular-nums; font-size: 12px; }
+
+.done-panel {
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  display: grid;
+  gap: 8px;
+}
+
+.done-panel .h { color: var(--success); font-weight: 700; font-size: 15px; }
+.done-panel.problem { border-color: rgba(239, 68, 68, 0.45); background: rgba(239, 68, 68, 0.08); }
+.done-panel.problem .h { color: var(--danger); }
+.done-panel.stopped { border-color: rgba(245, 158, 11, 0.45); background: rgba(245, 158, 11, 0.08); }
+.done-panel.stopped .h { color: var(--warn); }
+.done-panel a { color: #a5b4fc; }
+
+@media (max-width: 560px) {
+  .folder-group + .folder-group { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 10px; }
+}
+
+input[type="range"] { accent-color: var(--accent); }

@@ -93,6 +93,16 @@ so tell Chris.
     device is listed again after and must differ by exactly the deleted files. **`ALLOW_DEVICE_DELETE=1` is
     required for a real device over SMB; it stays off until Chris confirms his ASIAIR and NAS backups are done.**
 
+25. **UI review round 1 (2026-09-27; proposals page https://claude.ai/artifact/RoWP7YarUqbrodWycWEZqi).** Five button kinds
+    (main = one filled `primary` per screen, secondary, `.seg` choice, `danger`, `next`); **Next lives in the step bar
+    pinned to the bottom** (outlined until the step's action is done, then filled; disabled with a reason). One
+    **device pill** in the header (no separate "online" badges). Scan Images groups Autorun/Plan (with "n of m new
+    selected") apart from the other folders. **Clean up**: sections Ready to delete / Needs a check first / Not on the
+    NAS / Stays on the device; **nothing pre-ticked** ("recommended" + Select recommended); delete runs in four stages
+    (list, check every gate, delete, list again); a Done panel stays until dismissed. Previews never read a whole
+    frame over Wi-Fi (staged copy, NAS copy, or the device's thumbnail). UI changes that need Chris's decision go on
+    a lettered proposals page with mockups first (his standard).
+
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
 "the Astronomy share", in docs, UI, status names and code (`NasIndex`, `ASTRO_NAS`).
