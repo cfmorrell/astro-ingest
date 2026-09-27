@@ -636,6 +636,7 @@ function renderStepBar() {
     const s = state.catalogPreview.summary;
     parts.push(s.writes ? [b(`${s.writes} catalog update${s.writes === 1 ? "" : "s"}`), " to write"] : [b("Catalog up to date")]);
     if (state.catalogRunning) blocked = "Writing…";
+    else if (catalogPending()) blocked = "Write the catalog updates first";
   } else if (step === "clean" && state.cleanPreview) {
     const sel = cleanSelected();
     const k = selectionCounts(sel);
@@ -658,6 +659,20 @@ function renderStepBar() {
   }
 }
 
+function catalogPending() {
+  // catalog updates waiting to be written (they stay waiting on this step until they are)
+  const c = state.catalogPreview;
+  return !!(c && (c.summary.writes || c.summary.batches.length));
+}
+
+function leavingCatalogOk(step) {
+  // jumping ahead from Catalog with updates unwritten asks first (Chris, 2026-09-27: easy to miss)
+  if (state.activeStep !== "catalog" || STEPS.indexOf(step) <= STEPS.indexOf("catalog") || !catalogPending()) return true;
+  const n = state.catalogPreview.summary.writes;
+  return confirm(`${n ? `${n} catalog update${n === 1 ? " hasn't" : "s haven't"}` : "The copied batches haven't"} been written yet. ` +
+    "Go to Clean up anyway? They'll wait on Catalog until you write them.");
+}
+
 function goTo(step, from) {
   if (from) state.passed.add(from);
   state.activeStep = step;
@@ -677,7 +692,7 @@ function renderStepper() {
     stepper.appendChild(el("div", {
       class: classes.join(" "),
       title: STEP_PHASE[step] ? `arrives in phase ${STEP_PHASE[step]}` : null,
-      onclick: available ? () => { state.activeStep = step; showActiveStep(); } : null,
+      onclick: available ? () => { if (leavingCatalogOk(step)) { state.activeStep = step; showActiveStep(); } } : null,
     }, [
       el("div", { class: "dot" }, [complete ? "" : String(i + 1)]),
       el("span", {}, [STEP_LABELS[step]]),
