@@ -32,7 +32,7 @@ class Config:
     state_dir: Path
     tz: ZoneInfo
     asiair_root: Path | None
-    asiair_subnet: str
+    asiair_subnet: str | None
     asiair_share: str
     asiair_host: str | None
     cache_dir: Path  # disposable renders (thumbnails, lightbox previews); default STATE_DIR/cache
@@ -72,7 +72,7 @@ class Config:
             state_dir=state_dir,
             tz=tz,
             asiair_root=Path(asiair_root) if asiair_root else None,
-            asiair_subnet=optional("ASIAIR_SUBNET") or "192.168.1.0/24",
+            asiair_subnet=optional("ASIAIR_SUBNET"),   # an override; normally the home network is detected
             asiair_share=optional("ASIAIR_SHARE") or "EMMC Images",
             asiair_host=optional("ASIAIR_HOST"),
             cache_dir=Path(optional("CACHE_DIR") or state_dir / "cache"),

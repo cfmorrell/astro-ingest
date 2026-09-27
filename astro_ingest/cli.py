@@ -202,7 +202,13 @@ def cmd_find(args: argparse.Namespace) -> int:
     cfg = load_config()
     if cfg is None:
         return 2
-    subnet = args.subnet or cfg.asiair_subnet
+    from astro_ingest.service import recent_devices
+    from astro_ingest.sources import network
+    detected = network.detect(args.subnet or cfg.asiair_subnet, [], [r["host"] for r in recent_devices(cfg)])
+    if detected is None:
+        print("Which network is the device on? Give it with --subnet, e.g. --subnet 192.168.1.0/24", file=sys.stderr)
+        return 2
+    subnet = detected["subnet"]
     remembered = remembered_device(cfg)
     hints = [remembered["host"]] if remembered else []
     if cfg.asiair_host:

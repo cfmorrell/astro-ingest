@@ -27,13 +27,6 @@ const ACTION_LABELS = {
   "orphan-thumb": "orphan thumbnail",
   "ignored": "ignored folder",
 };
-const CLEANUP_LABELS = {
-  "after-verify": "Deleted from the ASIAIR once a checksum proves the NAS copy, when ticked on Clean up",
-  "callout": "Offered for deletion, each one called out",
-  "blocked": "Kept until they're filed or released for deletion",
-  "pending": "Waiting on a decision",
-  "never": "Never touched",
-};
 
 const state = {
   activeStep: "connect",  // the flow starts at the beginning and works left to right across the stepper
@@ -454,7 +447,7 @@ function stepStatus(step) {
   const passed = state.passed.has(step);
   switch (step) {
     case "connect": return { available: true, complete: !!(state.health && state.health.source_online) };
-    case "scan": return { available: true, complete: passed && planned };
+    case "scan": return { available: planned, complete: passed && planned };
     case "stage": return { available: planned, complete: passed && planned && selectedItems().every((i) => i.staged) };
     case "review": return { available: planned, complete: passed && planned && state.plan.summary.decisions_open === 0 };
     case "copy": return { available: planned, complete: passed && !!(state.copyPreview && state.copyPreview.copies === 0) };
@@ -592,71 +585,185 @@ function describeDevice(d) {
 }
 
 function renderConnect() {
-  const h = state.health;
+  // Proposal C / C2: recent devices (Connect, Rename, Forget), a search of the home network, and an Advanced section
   const body = document.getElementById("connect-body");
+  const msg = document.getElementById("connect-msg");
   body.innerHTML = "";
-  if (!h) return;
+  msg.textContent = state.connectMsg ? state.connectMsg.text : "";
+  msg.style.color = state.connectMsg && state.connectMsg.ok ? "var(--success)" : state.connectMsg ? "var(--warn)" : "";
   const dv = state.devices;
-  if (dv && dv.source_mode === "local") {
+  const h = state.health;
+  if (!dv) return;
+  if (dv.source_mode === "local") {
     body.appendChild(el("div", {}, ["Reading from a local folder (ASIAIR_ROOT): ", el("span", { class: "session-path" }, [dv.local_root])]));
-    body.appendChild(el("div", { class: "hint" }, [`Your capture device: ${describeDevice(dv.remembered)}. It is used whenever ASIAIR_ROOT is not set.`]));
-  } else {
-    body.appendChild(el("div", {}, ["Reading from ", el("b", {}, [dv ? describeDevice(dv.remembered) : "…"]), " over the network: ", el("span", { class: "session-path" }, [h.source])]));
+    return;
   }
-}
+  const busy = !!state.connectBusy;
+  const sel = dv.remembered;
+  const online = !!(h && h.source_online);
+  if (state.connectBusy) body.appendChild(el("div", { class: "hint", style: "margin:0 0 10px;" }, [state.connectBusy]));
 
-function renderFindResult(res) {
-  const box = document.getElementById("find-result");
-  box.innerHTML = "";
-  if (!res) return;
-  const status = res.choice ? res.choice.status : null;
-  box.appendChild(el("div", { class: status === "ask" ? "session-mismatch-warning" : "hint", style: "margin-bottom:8px;" }, [
-    res.choice ? res.choice.message : "",
-    res.seconds !== undefined ? `  (searched ${res.scanned} address${res.scanned === 1 ? "" : "es"} on ${res.subnet} in ${res.seconds}s)` : "",
-  ]));
-  Object.entries(res.errors || {}).forEach(([host, err]) => box.appendChild(el("div", { class: "hint" }, [`${host}: couldn't identify (${err})`])));
-  res.found.forEach((d) => {
-    const nameInput = el("input", { type: "text", placeholder: "your name for it, e.g. ASIAIR Color", value: d.remembered && res.remembered ? (res.remembered.nickname || "") : "" }, []);
-    box.appendChild(el("div", { class: "night-block" }, [
-      el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap;" }, [
-        el("span", { class: `badge ${d.remembered ? "ok" : "accent"}` }, [d.remembered ? "currently selected" : d.label]),
-        el("span", { class: "session-path" }, [d.host]),
-        el("span", { class: "hint", style: "margin:0;" }, [d.name ? `network name ${d.name}` : ""]),
+  if (dv.recent.length) {
+    body.appendChild(el("div", { class: "clean-section-h", style: "margin-top:0;" }, [el("span", { class: "t" }, ["Recent devices"]), el("span", { class: "hint", style: "margin:0;" }, ["every device you've connected to, most recent first"])]));
+    dv.recent.forEach((r, n) => {
+      const isSel = sel && sel.host === r.host;
+      const name = el("input", { type: "text", value: r.nickname || "", placeholder: "your name for it", "aria-label": "Device name", style: "width:200px;" }, []);
+      const last = r.last_connected ? new Date(r.last_connected * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+      body.appendChild(el("div", { class: `night-block device-row${isSel ? " current" : ""}` }, [
+        el("div", { style: "display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:space-between;" }, [
+          el("div", { style: "display:flex; gap:8px; align-items:center;" }, [
+            el("span", { class: "device-name" }, [r.nickname || r.label]),
+            isSel ? el("span", { class: `badge ${online ? "accent" : "danger"}` }, [online ? "currently selected" : "not answering"]) : null,
+            (dv.found || []).some((d) => d.host === r.host) ? el("span", { class: "badge ok" }, ["found in this search"]) : null,
+          ]),
+          el("span", { class: "session-path" }, [`${r.host}${last ? ` · last connected ${last}` : ""}`]),
+        ]),
+        el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;" }, [
+          isSel && online ? el("span", { class: "badge ok" }, ["connected"])
+            : el("button", { class: `small${!online && n === 0 ? " primary" : ""}`, disabled: busy ? "" : null, onclick: () => connectTo(r.host, null, r.nickname || r.label) }, ["Connect"]),
+          name,
+          el("button", { class: "small", disabled: busy ? "" : null, onclick: () => renameDevice(r.host, name.value) }, ["Rename"]),
+          el("button", { class: "small", disabled: busy ? "" : null, onclick: () => forgetDevice(r) }, ["Forget"]),
+        ]),
+      ]));
+    });
+  }
+
+  // search the home network (or ask which one it is)
+  const net = dv.network;
+  const box = el("div", { class: "night-block", style: "margin-top:12px;" }, []);
+  if (net) {
+    const where = { browser: `From this browser's address (${net.detail}).`, server: "From the server's own network.",
+      history: `From a device you connected to before (${net.detail}).`, setting: "Set by ASIAIR_SUBNET." }[net.source] || "";
+    box.appendChild(el("div", { style: "display:flex; gap:10px; align-items:center; flex-wrap:wrap;" }, [
+      el("button", { class: dv.recent.length ? "" : "primary", disabled: busy ? "" : null, onclick: () => findDevices(null) }, ["Search the network"]),
+      el("span", { class: "session-path" }, [net.subnet]),
+    ]));
+    box.appendChild(el("div", { class: "hint", style: "margin:6px 0 0;" }, [`${where} Tries every address, a few seconds. For a new device, or one whose address changed. Searching disconnects and starts a new session.`]));
+  } else {
+    const input = el("input", { type: "text", placeholder: "192.168.1.0/24", "aria-label": "Home network", style: "width:200px;" }, []);
+    box.appendChild(el("div", { class: "card-title", style: "margin-bottom:6px;" }, ["Which network is your ASIAIR on?"]));
+    box.appendChild(el("p", { class: "hint", style: "margin:0 0 8px;" }, ["Enter your home network: the first three numbers of your computer's IP address, then .0/24. For example, if your Mac is 192.168.1.3, enter 192.168.1.0/24. (On a Mac: System Settings → Wi-Fi → Details → TCP/IP.)"]));
+    box.appendChild(el("div", { style: "display:flex; gap:8px;" }, [input, el("button", { class: "primary small", disabled: busy ? "" : null, onclick: () => findDevices(input.value) }, ["Search this network"])]));
+  }
+  body.appendChild(box);
+
+  // what the last search found: a Connect button on every device, even when there's only one
+  (dv.found || []).filter((d) => !d.known).forEach((d) => {   // devices seen before are in Recent devices
+    const known = d.known;
+    const name = el("input", { type: "text", value: known ? (known.nickname || "") : "", placeholder: "name it, e.g. ASIAIR Color", "aria-label": "Name for this device", style: "width:200px;" }, []);
+    body.appendChild(el("div", { class: "night-block device-row" }, [
+      el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:space-between;" }, [
+        el("div", { style: "display:flex; gap:8px; align-items:center;" }, [
+          el("span", { class: "device-name" }, [known ? (known.nickname || d.label) : d.label]),
+          el("span", { class: `badge ${known ? "" : "ok"}` }, [known ? "seen before" : "new"]),
+        ]),
+        el("span", { class: "session-path" }, [`${d.host} · share “${d.share}”`]),
       ]),
-      el("div", { class: "session-meta" }, [`${d.label} · share “${d.share}” · folders: ${d.folders.filter((f) => !f.startsWith(".")).join(", ")}`]),
-      el("div", { style: "display:flex; gap:6px; align-items:center;" }, [
-        nameInput,
-        el("button", {
-          class: d.remembered ? "ghost small" : "small",
-          onclick: async () => {
-            state.devices = await api("POST", "/api/devices/select", { host: d.host, nickname: nameInput.value });
-            await loadHealth();
-            renderFindResult(Object.assign({}, res, state.devices, { choice: { status: "remembered", message: `Using ${describeDevice(state.devices.remembered)}.` }, found: state.devices.found }));
-            await loadPlan(false);
-          },
-        }, [d.remembered ? "Save name" : "Use this device"]),
+      el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;" }, [
+        name, el("button", { class: "small primary", disabled: busy ? "" : null, onclick: () => selectFound(d.host, name.value, known ? known.nickname || d.label : d.label) }, ["Connect"]),
+        el("span", { class: "hint", style: "margin:0;" }, [`${d.label} · folders: ${d.folders.filter((f) => !f.startsWith(".")).join(", ")}`]),
       ]),
     ]));
   });
+
+  // Advanced (collapsed): one address, or a different network
+  const ip = el("input", { type: "text", placeholder: "192.168.1.43", "aria-label": "Device address", style: "width:200px;" }, []);
+  const subnet = el("input", { type: "text", placeholder: "192.168.50.0/24", "aria-label": "Network to search", style: "width:200px;" }, []);
+  body.appendChild(el("details", { style: "margin-top:12px;" }, [
+    el("summary", { class: "toggle-adv", style: "margin:0;" }, ["Advanced"]),
+    el("div", { style: "display:grid; gap:8px; margin-top:10px;" }, [
+      el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap;" }, [el("span", { class: "hint", style: "margin:0; width:170px;" }, ["Connect to an address"]), ip,
+        el("button", { class: "small", disabled: busy ? "" : null, onclick: () => connectTo(ip.value, null, ip.value) }, ["Connect"])]),
+      el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap;" }, [el("span", { class: "hint", style: "margin:0; width:170px;" }, ["Search a different network"]), subnet,
+        el("button", { class: "small", disabled: busy ? "" : null, onclick: () => findDevices(subnet.value) }, ["Search"])]),
+    ]),
+  ]));
 }
 
-async function findDevices(full) {
-  const btns = [document.getElementById("find-btn"), document.getElementById("find-all-btn")];
-  btns.forEach((b) => { b.disabled = true; });
-  renderDevicePill(true);
-  document.getElementById("find-result").innerHTML = "";
-  document.getElementById("find-result").appendChild(el("div", { class: "hint" }, ["Searching…"]));
+async function afterConnect(res, what) {
+  state.devices = res;
+  state.connectBusy = `Connected to ${what}. Scanning it…`;
+  renderConnect();
+  await loadHealth();
+  await loadPlan(false);
+  state.connectBusy = null;
+  state.connectMsg = { ok: true, text: `✓ Connected to ${what}.` };
+  renderConnect();
+}
+
+async function connectTo(host, nickname, what) {
+  state.connectBusy = `Connecting to ${what}…`;
+  state.connectMsg = null;
+  renderConnect();
   try {
-    const res = await api("POST", "/api/devices/find", { full });
-    state.devices = res;
-    renderFindResult(res);
-    await loadHealth();
+    await afterConnect(await api("POST", "/api/devices/connect", { host, nickname }), what);
   } catch (e) {
-    renderDevicePill();
-    document.getElementById("find-result").innerHTML = "";
-    document.getElementById("find-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
+    state.connectBusy = null;
+    state.connectMsg = { ok: false, text: String(e.message || e).replace(/^\d+: "?|"$/g, "") };
+    renderConnect();
   }
-  btns.forEach((b) => { b.disabled = false; });
+}
+
+async function selectFound(host, nickname, what) {
+  state.connectBusy = `Connecting to ${nickname || what}…`;
+  state.connectMsg = null;
+  renderConnect();
+  try {
+    await afterConnect(await api("POST", "/api/devices/select", { host, nickname: nickname || null }), nickname || what);
+  } catch (e) {
+    state.connectBusy = null;
+    state.connectMsg = { ok: false, text: String(e.message || e).replace(/^\d+: "?|"$/g, "") };
+    renderConnect();
+  }
+}
+
+async function renameDevice(host, nickname) {
+  try {
+    const res = await api("POST", "/api/devices/rename", { host, nickname });
+    state.devices = res;
+    state.connectMsg = { ok: true, text: `✓ ${res.message}` };
+    renderDevicePill();
+    renderConnect();
+    renderStepBar();
+    if (state.cleanPreview) loadCleanStep();
+  } catch (e) {
+    state.connectMsg = { ok: false, text: String(e.message || e) };
+    renderConnect();
+  }
+}
+
+async function forgetDevice(r) {
+  const name = r.nickname || r.label;
+  if (!confirm(`Forget ${name} (${r.host})? It's removed from Recent devices${state.devices.remembered && state.devices.remembered.host === r.host ? " and disconnected" : ""}. Nothing on the device or the NAS changes; frames it had staged stay in staging until Start over.`)) return;
+  const res = await api("POST", "/api/devices/forget", { host: r.host });
+  state.devices = res;
+  state.connectMsg = { ok: true, text: `✓ Forgot ${name}.` };
+  if (!res.remembered) { state.plan = null; }
+  await loadHealth();
+  renderStepper();
+}
+
+async function findDevices(subnet) {
+  // A search starts a new session: the app disconnects, then lists every device it finds
+  state.connectBusy = "Searching the network…";
+  state.connectMsg = null;
+  state.plan = null;
+  state.passed.clear();
+  renderDevicePill(true);
+  renderConnect();
+  renderStepper();
+  try {
+    const res = await api("POST", "/api/devices/find", subnet ? { subnet } : {});
+    state.devices = res;
+    state.connectMsg = { ok: !!res.found.length, text: `${res.message}${res.seconds !== undefined ? ` (${res.scanned} addresses in ${res.seconds} s)` : ""}` };
+  } catch (e) {
+    state.connectMsg = { ok: false, text: String(e.message || e).replace(/^\d+: "?|"$/g, "") };
+    state.devices = await api("GET", "/api/devices");
+  }
+  state.connectBusy = null;
+  await loadHealth();
+  renderStepper();
 }
 
 const CAPTURE_FOLDERS = ["Autorun", "Plan"];  // the only folders ingested; everything else is listed for reference
@@ -1420,7 +1527,6 @@ function renderReview() {
   renderDecisions(p);
   renderSessions(p);
   renderLibrary(p);
-  renderCleanup(p);
 }
 
 async function answerDecision(d, value) {
@@ -1590,26 +1696,6 @@ function renderLibrary(p) {
   });
 }
 
-function renderCleanup(p) {
-  const box = document.getElementById("cleanup-preview");
-  box.innerHTML = "";
-  ["after-verify", "callout", "blocked", "pending", "never"].forEach((key) => {
-    const c = p.summary.cleanup[key];
-    if (!c) return;
-    const items = p.items.filter((i) => i.cleanup === key);
-    const block = el("div", { class: "night-block" }, [
-      el("div", { style: "display:flex; gap:8px; align-items:center;" }, [
-        el("span", { class: `badge ${key === "after-verify" ? "ok" : key === "blocked" ? "danger" : key === "never" ? "" : "warn"}` }, [`${c.files} files · ${gb(c.bytes)}`]),
-        el("span", {}, [CLEANUP_LABELS[key]]),
-      ]),
-    ]);
-    // Anything that isn't a plain verified frame is listed by name (Chris: call out everything unusual)
-    if (key !== "after-verify") block.appendChild(toggleList(`show ${items.length} item${items.length === 1 ? "" : "s"}`, items.map((i) => itemRow(i, key === "callout" || key === "blocked"))));
-    box.appendChild(block);
-  });
-  box.appendChild(el("p", { class: "hint" }, ["Every frame's _thn.jpg thumbnail goes with it; file counts include them."]));
-}
-
 // ---------- jobs (astro-stacker's pollJob shape) ----------
 
 async function pollJob(jobId, progressEl, onDone, onTick) {
@@ -1685,7 +1771,7 @@ function applyPlan(plan) {
 async function loadHealth() {
   const banner = document.getElementById("app-banner");
   try {
-    state.devices = state.devices || await api("GET", "/api/devices");
+    state.devices = await api("GET", "/api/devices");
     state.health = await api("GET", "/health");
     banner.style.display = "none";
     if (state.health.version) document.getElementById("app-version").textContent = `v${state.health.version}`;
@@ -1764,8 +1850,6 @@ document.getElementById("copy-run-btn").addEventListener("click", runCopy);
 document.getElementById("catalog-run-btn").addEventListener("click", runCatalog);
 document.getElementById("brand-link").addEventListener("click", (e) => { e.preventDefault(); state.activeStep = "connect"; showActiveStep(); });
 document.getElementById("quality-run-btn").addEventListener("click", runQuality);
-document.getElementById("find-btn").addEventListener("click", () => findDevices(false));
-document.getElementById("find-all-btn").addEventListener("click", () => findDevices(true));
 // σ slider: flags and charts follow while dragging (computed locally); the server applies it on release
 document.getElementById("quality-sigma").addEventListener("input", (e) => {
   state.sigmaLive = Number(e.target.value);

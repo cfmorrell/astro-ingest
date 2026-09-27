@@ -101,16 +101,93 @@ def sigma(answers: dict[str, str]) -> float:
 DEVICES_FILE = "devices.json"
 
 
+RECENT_MAX = 10
+
+
+def _devices(cfg: Config) -> dict:
+    """STATE_DIR/devices.json: {"selected": record | None, "recent": [record, ...]} (most recent first). A record is
+    the device (kind, label, host, share, …) plus Chris's name for it, a `slug` fixed at first connect (it names the
+    device's staging folder and its Verify results, so a rename never orphans them) and `last_connected`."""
+    from astro_ingest import staging
+    data = state.read_json(Path(cfg.state_dir) / DEVICES_FILE, {})
+    sel = data.get("selected")
+    recent = data.get("recent")
+    if recent is None:                     # before recent devices (2026-09-27): only the selected one
+        recent = [sel] if sel else []
+    for r in recent + ([sel] if sel else []):
+        if r and not r.get("slug"):
+            r["slug"] = staging.device_slug(r, False)   # the name its data is already filed under
+    if sel:
+        sel = next((r for r in recent if _same(r, sel)), sel)
+    return {"selected": sel, "recent": recent}
+
+
+def _same(a: dict, b: dict) -> bool:
+    return a.get("kind") == b.get("kind") and a.get("host") == b.get("host")
+
+
+def _save_devices(cfg: Config, data: dict) -> None:
+    state.write_json(cfg, Path(cfg.state_dir) / DEVICES_FILE, {"selected": data["selected"], "recent": data["recent"]})
+
+
 def remembered_device(cfg: Config) -> dict | None:
-    """The capture device Chris picked (kind, host, server_guid, …), from STATE_DIR/devices.json."""
-    return state.read_json(Path(cfg.state_dir) / DEVICES_FILE, {}).get("selected")
+    """The capture device currently connected (kind, host, slug, nickname, …), or None."""
+    return _devices(cfg)["selected"]
+
+
+def recent_devices(cfg: Config) -> list[dict]:
+    return _devices(cfg)["recent"]
 
 
 def remember_device(cfg: Config, device, nickname: str | None = None) -> dict:
-    """Remember `device` (by kind + address) as the one to ingest from, with Chris's name for it."""
-    record = {**device.to_dict(), "nickname": nickname}
-    state.write_json(cfg, Path(cfg.state_dir) / DEVICES_FILE, {"selected": record})
+    """Connect to `device`: it becomes the selected device and moves to the top of the recent list. A device already
+    known at that address keeps its name (unless a new one is given) and its slug."""
+    import time
+    from astro_ingest import staging
+    data = _devices(cfg)
+    d = device.to_dict() if hasattr(device, "to_dict") else dict(device)
+    old = next((r for r in data["recent"] if _same(r, d)), None)
+    record = {**(old or {}), **d, "nickname": (nickname or "").strip() or (old or {}).get("nickname"),
+              "last_connected": time.time()}
+    if not record.get("slug"):
+        taken = {r.get("slug") for r in data["recent"]}
+        base = slug = staging.device_slug(record, False)
+        n = 2
+        while slug in taken:
+            slug, n = f"{base}-{n}", n + 1
+        record["slug"] = slug
+    data["recent"] = [record] + [r for r in data["recent"] if not _same(r, record)][:RECENT_MAX - 1]
+    data["selected"] = record
+    _save_devices(cfg, data)
     return record
+
+
+def rename_device(cfg: Config, host: str, nickname: str) -> dict:
+    data = _devices(cfg)
+    rec = next((r for r in data["recent"] if r.get("host") == host), None)
+    if rec is None:
+        raise KeyError(host)
+    rec["nickname"] = nickname.strip() or None
+    if data["selected"] and _same(data["selected"], rec):
+        data["selected"] = rec
+    _save_devices(cfg, data)
+    return rec
+
+
+def forget_device(cfg: Config, host: str) -> None:
+    """Drop a device from the recent list (it disconnects if it's the one connected). Its staged files and Verify
+    results stay on disk under its slug."""
+    data = _devices(cfg)
+    data["recent"] = [r for r in data["recent"] if r.get("host") != host]
+    if data["selected"] and data["selected"].get("host") == host:
+        data["selected"] = None
+    _save_devices(cfg, data)
+
+
+def disconnect_device(cfg: Config) -> None:
+    data = _devices(cfg)
+    data["selected"] = None
+    _save_devices(cfg, data)
 
 
 @dataclass

@@ -1666,3 +1666,10 @@ main {
 }
 
 input[type="range"] { accent-color: var(--accent); }
+
+/* Connect (proposal C2): recent devices and search results */
+.device-row.current { border-color: rgba(99, 102, 241, 0.55); }
+.device-name { font-weight: 600; font-size: 15px; }
+details > summary.toggle-adv { list-style: none; }
+details > summary.toggle-adv::-webkit-details-marker { display: none; }
+.device-row { border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; background: var(--panel-2); margin-bottom: 8px; }

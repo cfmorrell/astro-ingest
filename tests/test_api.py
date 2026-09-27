@@ -95,29 +95,52 @@ def test_only_state_and_cache_written(tmp_path):
     assert new and all(p.is_relative_to(root / "state") for p in new)
 
 
-def test_device_find_and_select(tmp_path, monkeypatch):
+def test_devices_search_connect_rename_forget(tmp_path, monkeypatch):
+    from astro_ingest.sources import devices as devmod
     from astro_ingest.sources import discover as disc
     from astro_ingest.sources.devices import Device
 
     folders = ["Autorun", "Live", "Plan"]
     found = [Device("asiair", "ZWO ASIAIR", "192.168.1.43", "EMMC Images", "g", None, folders),
              Device("asiair", "ZWO ASIAIR", "192.168.1.77", "EMMC Images", "g", None, folders)]
-    monkeypatch.setattr(disc, "discover", lambda *a, **k: disc.Discovery(found, ["192.168.1.43", "192.168.1.77"], 254, 2.4))
+    searched = []
+    monkeypatch.setattr(disc, "discover", lambda subnet, *a, **k: searched.append(subnet) or disc.Discovery(
+        found, ["192.168.1.43", "192.168.1.77"], 254, 2.4))
     client, _, root = make_app(tmp_path)
-    assert client.get("/api/devices").json()["remembered"] is None
+    fwd = {"X-Forwarded-For": "192.168.1.3"}                          # the browser, on the home network
+    d = client.get("/api/devices", headers=fwd).json()
+    assert d["remembered"] is None and d["recent"] == []
+    assert d["network"] == {"subnet": "192.168.1.0/24", "source": "browser", "detail": "192.168.1.3"}
 
-    res = client.post("/api/devices/find", json={"full": False}).json()
-    assert res["choice"]["status"] == "ask" and len(res["found"]) == 2          # two ASIAIRs: Chris picks
-    assert client.get("/api/devices").json()["remembered"] is None               # nothing chosen for him
+    res = client.post("/api/devices/find", json={}, headers=fwd).json()
+    assert searched == ["192.168.1.0/24"] and len(res["found"]) == 2 and res["remembered"] is None  # nothing picked
+    one = [found[0]]
+    monkeypatch.setattr(disc, "discover", lambda *a, **k: disc.Discovery(one, ["192.168.1.43"], 254, 2.4))
+    res = client.post("/api/devices/find", json={"subnet": "192.168.1.0/24"}).json()
+    assert len(res["found"]) == 1 and res["remembered"] is None       # even when there's only one
+    assert client.post("/api/devices/find", json={"subnet": "8.8.8.0/24"}).status_code == 400
 
-    res = client.post("/api/devices/select", json={"host": "192.168.1.77", "nickname": "ASIAIR Mono"}).json()
-    assert res["remembered"]["host"] == "192.168.1.77" and res["remembered"]["nickname"] == "ASIAIR Mono"
-    assert (root / "state" / "devices.json").is_file()
-    assert client.post("/api/devices/select", json={"host": "10.0.0.1"}).status_code == 404
+    res = client.post("/api/devices/select", json={"host": "192.168.1.43", "nickname": "ASIAIR Color"}).json()
+    assert res["remembered"]["nickname"] == "ASIAIR Color" and res["remembered"]["slug"] == "ASIAIR-Color"
+    assert [r["host"] for r in res["recent"]] == ["192.168.1.43"]
 
-    monkeypatch.setattr(disc, "discover", lambda *a, **k: disc.Discovery(found[:1], ["192.168.1.43"], 254, 2.4))
-    res = client.post("/api/devices/find", json={"full": True}).json()
-    assert res["choice"]["status"] == "ask" and "ASIAIR Mono" in res["choice"]["message"]   # never a silent switch
+    res = client.post("/api/devices/rename", json={"host": "192.168.1.43", "nickname": "Big rig"}).json()
+    assert res["remembered"]["nickname"] == "Big rig" and res["remembered"]["slug"] == "ASIAIR-Color"   # data stays put
+
+    res = client.post("/api/devices/find", json={"subnet": "192.168.1.0/24"}).json()
+    assert res["remembered"] is None and res["recent"][0]["nickname"] == "Big rig"   # a search disconnects
+
+    monkeypatch.setattr(disc, "port_open", lambda host, **k: host == "192.168.1.43")
+    monkeypatch.setattr(devmod, "identify", lambda host, **k: [d for d in found if d.host == host])
+    res = client.post("/api/devices/connect", json={"host": "192.168.1.43"}).json()
+    assert res["remembered"]["host"] == "192.168.1.43" and res["remembered"]["nickname"] == "Big rig"
+    r = client.post("/api/devices/connect", json={"host": "192.168.1.77"})
+    assert r.status_code == 404 and "192.168.1.77" in r.json()["detail"]
+    assert client.get("/api/devices").json()["remembered"]["host"] == "192.168.1.43"   # never a silent switch
+    assert client.post("/api/devices/connect", json={"host": "not-an-ip"}).status_code == 400
+
+    res = client.post("/api/devices/forget", json={"host": "192.168.1.43"}).json()
+    assert res["recent"] == [] and res["remembered"] is None
 
 
 def test_answering_decisions(tmp_path):

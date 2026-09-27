@@ -8,6 +8,7 @@ never shadows an API route.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 import threading
 from pathlib import Path, PurePosixPath
@@ -17,7 +18,7 @@ from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from astro_ingest import analysis, batch, catalog, cleanup, db, jobs, service, staging, state
-from astro_ingest.sources import devices, discover
+from astro_ingest.sources import devices, discover, network
 from astro_ingest.config import VERSION, Config
 from astro_ingest.core import imaging
 
@@ -109,43 +110,110 @@ def create_app(cfg: Config) -> FastAPI:
 
     found: dict[str, list] = {}
 
-    def devices_json(choice=None) -> dict:
-        remembered = service.remembered_device(cfg)
+    def client_hosts(request: Request) -> list[str]:
+        # the browser's address: behind a reverse proxy it's the first X-Forwarded-For entry
+        fwd = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+        return fwd + ([request.client.host] if request.client else [])
+
+    def network_for(request: Request | None) -> dict | None:
+        return network.detect(cfg.asiair_subnet, client_hosts(request) if request else [],
+                              [r["host"] for r in service.recent_devices(cfg)])
+
+    def devices_json(request: Request | None = None, message: str | None = None) -> dict:
+        selected = service.remembered_device(cfg)
+        recent = service.recent_devices(cfg)
+        known = {r["host"]: r for r in recent}
         return {
             "source_mode": "local" if cfg.asiair_root else "smb",
             "local_root": str(cfg.asiair_root) if cfg.asiair_root else None,
-            "remembered": remembered,
-            "found": [d.to_dict() | {"display": d.display, "remembered": devices.is_remembered(d, remembered)}
-                      for d in found.get("devices", [])],
-            "choice": None if choice is None else {"status": choice.status, "message": choice.message,
-                                                   "host": choice.device.host if choice.device else None},
-            "subnet": cfg.asiair_subnet,
+            "remembered": selected,
+            "recent": recent,
+            "found": [d.to_dict() | {"display": d.display, "known": known.get(d.host)} for d in found.get("devices", [])],
+            "network": network_for(request),
+            "message": message,
         }
 
+    def connected(record: dict) -> None:
+        with lock:
+            cache.pop("plan", None)  # a new session on this device: scan it again
+
     @app.get("/api/devices")
-    def get_devices():
-        return devices_json()
+    def get_devices(request: Request):
+        return devices_json(request)
 
     @app.post("/api/devices/find")
-    def find_devices(full: bool = Body(False, embed=True)):
-        remembered = service.remembered_device(cfg)
-        hints = [h for h in ([remembered["host"]] if remembered else []) + [cfg.asiair_host] if h]
-        d = discover.discover(cfg.asiair_subnet, hints, remembered, full=full)
+    def find_devices(request: Request, subnet: str | None = Body(None, embed=True)):
+        """Search a network for devices. It starts a new session: disconnect first, nothing is picked for you (every
+        device found gets its own Connect button, even when there's only one)."""
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
+        try:
+            net = network.valid_subnet(subnet) if subnet else (network_for(request) or {}).get("subnet")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        if not net:
+            raise HTTPException(400, "which network is the device on? Enter it, e.g. 192.168.1.0/24")
+        service.disconnect_device(cfg)
+        with lock:
+            cache.pop("plan", None)
+        d = discover.discover(net, [], None, full=True)
         found["devices"] = d.devices
-        choice = devices.choose(d.devices, remembered)
-        if choice.status == "only-one":
-            service.remember_device(cfg, choice.device)
-        return devices_json(choice) | {"scanned": d.scanned, "seconds": d.seconds, "errors": d.errors}
+        n = len(d.devices)
+        msg = f"Found {n} device{'s' if n != 1 else ''} on {net}." if n else f"No capture device answered on {net}. Is it powered on and on this network?"
+        return devices_json(request, msg) | {"scanned": d.scanned, "seconds": d.seconds, "errors": d.errors, "subnet": net}
 
     @app.post("/api/devices/select")
-    def select_device(host: str = Body(...), nickname: str | None = Body(None)):
+    def select_device(request: Request, host: str = Body(...), nickname: str | None = Body(None)):
+        """Connect to a device from the last search."""
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
         match = [d for d in found.get("devices", []) if d.host == host]
         if len(match) != 1:
-            raise HTTPException(404, "no such device in the last search: run Find again")
-        service.remember_device(cfg, match[0], (nickname or "").strip() or None)
-        with lock:
-            cache.pop("plan", None)  # the source may have changed
-        return devices_json()
+            raise HTTPException(404, "no such device in the last search: search again")
+        connected(service.remember_device(cfg, match[0], nickname))
+        return devices_json(request)
+
+    @app.post("/api/devices/connect")
+    def connect_device(request: Request, host: str = Body(...), nickname: str | None = Body(None)):
+        """Connect to a device at one address: a recent device at its last address, or an address typed in. Never
+        switches to something else: if nothing (or no capture device) answers there, it says so."""
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
+        host = host.strip()
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            raise HTTPException(400, f"{host!r} isn't an IP address") from None
+        known = next((r for r in service.recent_devices(cfg) if r["host"] == host), None)
+        who = (known.get("nickname") or known.get("label")) if known else "Nothing"
+        try:
+            devs = devices.identify(host) if discover.port_open(host, timeout=2.0) else []
+        except Exception:
+            devs = []
+        if not devs:
+            raise HTTPException(404, f"{who} isn't answering at {host}. It may have a new address: search the network."
+                                if known else f"No capture device answered at {host}.")
+        connected(service.remember_device(cfg, devs[0], nickname))
+        return devices_json(request)
+
+    @app.post("/api/devices/rename")
+    def rename_device(request: Request, host: str = Body(...), nickname: str = Body(...)):
+        try:
+            service.rename_device(cfg, host, nickname)
+        except KeyError:
+            raise HTTPException(404, "not a recent device") from None
+        return devices_json(request, f"Renamed to “{nickname.strip()}”." if nickname.strip() else "Name cleared.")
+
+    @app.post("/api/devices/forget")
+    def forget_device(request: Request, host: str = Body(..., embed=True)):
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
+        was = service.remembered_device(cfg)
+        service.forget_device(cfg, host)
+        if was and was["host"] == host:
+            with lock:
+                cache.pop("plan", None)
+        return devices_json(request)
 
     # ---------------- the device's own thumbnails, for the Select grid (small, fast over Wi-Fi)
 

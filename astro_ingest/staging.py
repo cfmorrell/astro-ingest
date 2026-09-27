@@ -35,6 +35,8 @@ def device_slug(device: dict | None, local: bool) -> str:
     """Folder name under STAGING_DIR for this device ('ASIAIR-Color', or 'local' for a local-folder source)."""
     if local or not device:
         return "local"
+    if device.get("slug"):
+        return device["slug"]    # fixed at first connect: renaming a device never moves its data
     name = device.get("nickname") or f"{device.get('label', 'device')}-{device.get('host', '')}"
     return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "device"
 

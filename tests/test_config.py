@@ -19,7 +19,7 @@ def make_env(tmp_path, **overrides):
 def test_from_env_defaults(tmp_path):
     cfg = Config.from_env(make_env(tmp_path))
     assert cfg.asiair_root is None
-    assert cfg.asiair_subnet == "192.168.1.0/24"
+    assert cfg.asiair_subnet is None   # detected unless overridden
     assert cfg.asiair_share == "EMMC Images"
     assert cfg.asiair_host is None
     assert str(cfg.tz) == "America/New_York"

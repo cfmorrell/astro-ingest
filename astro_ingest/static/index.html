@@ -23,14 +23,10 @@
     <div class="card">
       <div class="card-header">
         <div class="card-title">Capture device</div>
+        <div id="connect-msg" class="hint" style="margin:0;"></div>
       </div>
       <div id="connect-body"></div>
-      <div class="progress-wrap">
-        <button id="find-btn" class="primary">Find devices</button>
-        <button id="find-all-btn" class="ghost">Search the whole network</button>
-      </div>
-      <div id="find-result" style="margin-top:12px;"></div>
-      <p class="hint">Looks for capture devices on the home network (today: ZWO ASIAIR). Finding a device only logs in as guest and lists the top of its share; nothing on it is opened, changed or deleted.</p>
+      <p class="hint">Looks for capture devices on your home network (today: ZWO ASIAIR). Searching or connecting only logs in as guest and lists the top of the device's share; nothing on it is opened, changed or deleted.</p>
     </div>
   </section>
 
@@ -131,13 +127,6 @@
       <div id="library-list"></div>
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">Clean-up preview</div>
-        <div class="badge">nothing deleted yet</div>
-      </div>
-      <div id="cleanup-preview"></div>
-    </div>
   </section>
 
   <!-- ============ LATER PHASES ============ -->
