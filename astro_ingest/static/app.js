@@ -931,14 +931,16 @@ function renderScan() {
     if (stageable.includes(i.action) || i.action === "excluded") t.fresh += 1;
     if (stageable.includes(i.action)) t.selected += 1;
   });
+  CAPTURE_FOLDERS.forEach((top) => { byTop[top] = byTop[top] || { files: 0, bytes: 0, frames: 0, fresh: 0, selected: 0 }; });
   const tile = (top, quiet) => {
     const t = byTop[top];
-    const what = top === "(share root)" ? "files at the top of the share" : `${top} ${t.frames ? "frames" : "files"}`;
+    // capture folders always show, empty or not ("0 Autorun frames · 0 B")
+    const what = top === "(share root)" ? "files at the top of the share" : `${top} ${t.frames || !t.files ? "frames" : "files"}`;
     const kids = [el("div", { class: "num" }, [String(t.frames || t.files)]), el("div", { class: "lbl" }, [`${what} · ${gb(t.bytes)}`])];
     if (!quiet) kids.push(el("div", { class: "sel" }, [t.fresh ? `${t.selected} of ${t.fresh} new selected` : "nothing new"]));
     return el("div", { class: `stat${quiet ? " quiet" : ""}` }, kids);
   };
-  const capture = CAPTURE_FOLDERS.filter((t) => byTop[t]);
+  const capture = CAPTURE_FOLDERS;
   const other = Object.keys(byTop).filter((t) => !CAPTURE_FOLDERS.includes(t)).sort();
   body.appendChild(el("div", { class: "folder-groups" }, [
     el("div", { class: "folder-group" }, [el("div", { class: "folder-group-h" }, ["Capture folders · ingested"]), el("div", { class: "stat-row" }, capture.map((t) => tile(t, false)))]),
@@ -1054,7 +1056,7 @@ function renderSelect() {
       grid,
     ]));
   });
-  if (!box.children.length) box.appendChild(el("div", { class: "card empty-hint" }, ["Nothing on the device needs reading: everything is already on the NAS."]));
+  if (!box.children.length) box.appendChild(el("div", { class: "card empty-hint" }, ["Nothing to stage: there are no new frames in Autorun or Plan (they're empty, or everything in them is already on the NAS)."]));
 }
 
 // ---------- stage ----------
