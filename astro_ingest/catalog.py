@@ -52,6 +52,7 @@ class Preview:
     new_targets: list[dict]
     gaps: list[dict]
     log_lines: list[str]
+    links_check: dict = field(default_factory=dict)   # links.check(): checked, broken, empty
 
     def summary(self) -> dict:
         c = Counter((ch.kind, ch.status) for ch in self.changes)
@@ -64,7 +65,7 @@ class Preview:
 
     def to_dict(self) -> dict:
         return {"summary": self.summary(), "sessions": self.sessions, "new_targets": self.new_targets,
-                "gaps": self.gaps, "log_lines": self.log_lines,
+                "gaps": self.gaps, "log_lines": self.log_lines, "links_check": self.links_check,
                 "changes": [{k: v for k, v in asdict(ch).items() if k != "text"} for ch in self.changes]}
 
 
@@ -191,7 +192,10 @@ def preview(cfg: Config, today: dt.date | None = None, progress=lambda *a, **k: 
     # dev: the sandbox holds only part of the share; a link the live share already has isn't "missing"
     for other in roots[1:]:
         add = [a for a in add if not ((other / a).is_symlink() and os.readlink(other / a) == want[a])]
-    changes += [Change("link-remove", r, "remove", "no longer matches targets.csv / the sessions") for r in remove]
+    lcheck = links.check(root)
+    gone = {b["link"] for b in lcheck["broken"]}
+    changes += [Change("link-remove", r, "remove", "the folder is gone" if r in gone else
+                       "no longer matches targets.csv / the sessions") for r in remove]
     changes += [Change("link-add", a, "add", "", target=want[a]) for a in add]
     md = links.index_markdown(all_rows)
     old_md = (root / links.INDEX_MD).read_text() if (root / links.INDEX_MD).is_file() else None
@@ -207,7 +211,7 @@ def preview(cfg: Config, today: dt.date | None = None, progress=lambda *a, **k: 
     log_lines += [f"| {today.isoformat()} | New library batch `{f}` ingested by astro-ingest. |" for f in sorted(lib_folders)]
     log_lines += [f"| {today.isoformat()} | `{s}` borrowed flats from `{src}` (approved on Review). |"
                   for s, src in sorted(borrowed.items())]
-    return Preview([b["id"] for b in batches], sorted(touched), changes, new_rows, gaps, log_lines)
+    return Preview([b["id"] for b in batches], sorted(touched), changes, new_rows, gaps, log_lines, lcheck)
 
 
 def _sibling_notes(roots: list[Path], touched: set[str], index) -> list[Change]:

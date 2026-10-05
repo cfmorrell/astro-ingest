@@ -1348,6 +1348,20 @@ function renderCatalog() {
     prog.querySelector(".msg").textContent = s.writes ? "waiting for your approval" : "catalog is up to date";
   }
 
+  // the index-link check (proposal O): every link, every time; broken ones are removed, empty ones only reported
+  const lc = pv.links_check || {};
+  if (lc.checked !== undefined) {
+    const broken = (lc.broken || []).length;
+    const empty = lc.empty || [];
+    box.appendChild(el("div", { class: "hint", style: "margin:10px 0 0; color:var(--text);" }, [
+      `Index links: ${lc.checked} checked in ByMessierNumber, ByNGCNumber, ByICNumber and ByDate. `,
+      !broken && !empty.length ? "All point at folders with frames in them." : "",
+      broken ? `${broken} broken (the folder is gone): removed when you write, listed below. ` : "",
+      empty.length ? `${empty.length} point at a folder with no frames in it: left in place.` : "",
+    ]));
+    if (empty.length) box.appendChild(toggleList(`show ${empty.length} link${empty.length === 1 ? "" : "s"} to empty folders`,
+      empty.map((e) => el("div", { class: "session-path" }, [`${e.link} → ${e.target}`]))));
+  }
   const list = document.getElementById("catalog-changes");
   list.innerHTML = "";
   const todo = pv.changes.filter((c) => c.status !== "unchanged");
