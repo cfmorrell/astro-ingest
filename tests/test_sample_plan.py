@@ -1,8 +1,15 @@
-"""Acceptance test: the plan for the real ASIAIR sample against the live NAS (read-only).
+"""Acceptance test: the plan for the real ASIAIR sample against the Astronomy share as it was on 2026-09-26.
 
-Skipped unless both are mounted (dev container). The numbers come from the Phase 2 survey in docs/PLAN.md.
+Both sides are frozen so the numbers keep meaning something: the ASIAIR side is the sample copy of the device
+(/astro-sandbox/_asiair-sample, dev container only: skipped elsewhere), and the NAS side is a snapshot of the share
+before production started ingesting this same data (tests/data/nas-before-prod.json.gz, made by
+dev/freeze_nas_snapshot.py: names and sizes only, rebuilt here as empty placeholder files). The numbers come from
+the Phase 2 survey in docs/PLAN.md.
 """
 
+import gzip
+import json
+import os
 from collections import Counter
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -16,16 +23,32 @@ from astro_ingest.core.targets import load_targets
 from astro_ingest.sources.local import LocalDirSource
 
 SAMPLE = Path("/astro-sandbox/_asiair-sample")
-NAS = Path("/astro")
-TARGETS = NAS / "Z95-ClaudeReferences" / "targets.csv"
+SNAPSHOT = Path(__file__).parent / "data" / "nas-before-prod.json.gz"
 
-pytestmark = pytest.mark.skipif(not (SAMPLE.is_dir() and TARGETS.is_file()), reason="sample or NAS not mounted")
+pytestmark = pytest.mark.skipif(not SAMPLE.is_dir(), reason="the ASIAIR sample isn't mounted (dev container only)")
 
 
 @pytest.fixture(scope="module")
-def plan():
-    return P.build_plan(scan(LocalDirSource(SAMPLE), ZoneInfo("America/New_York")), build_index(NAS),
-                        load_targets(TARGETS))
+def frozen_nas(tmp_path_factory):
+    """The share as it was: every frame as an empty placeholder of its real size (sparse), plus targets.csv."""
+    root = tmp_path_factory.mktemp("nas")
+    with gzip.open(SNAPSHOT, "rt") as f:
+        snap = json.load(f)
+    for rel, size in snap["files"]:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "wb") as fh:
+            fh.truncate(size)
+    targets = root / "Z95-ClaudeReferences" / "targets.csv"
+    targets.parent.mkdir(parents=True, exist_ok=True)
+    targets.write_text(snap["targets_csv"])
+    return root
+
+
+@pytest.fixture(scope="module")
+def plan(frozen_nas):
+    return P.build_plan(scan(LocalDirSource(SAMPLE), ZoneInfo("America/New_York")), build_index(frozen_nas),
+                        load_targets(frozen_nas / "Z95-ClaudeReferences" / "targets.csv"))
 
 
 def session(plan, rel):
@@ -34,11 +57,14 @@ def session(plan, rel):
 
 def test_already_ingested_and_appends(plan):
     actions = Counter(i.action for i in plan.items)
-    assert actions[P.ALREADY] == 446            # 447 by name; one NAS copy is truncated (name clash)
-    assert actions[P.APPEND] == 22
+    # The Phase 2 survey had 446 and 22 (with 4 appends into OrionNebula-M42/2026-04-11-OrionNebula-2600MC-RC6). That
+    # session was removed from the share by hand on 2026-10-02, before the snapshot was frozen, so its 16 frames
+    # aren't on the frozen share and those 4 frames start a new session instead.
+    assert actions[P.ALREADY] == 430            # one more NAS copy by name is truncated (name clash)
+    assert actions[P.APPEND] == 18
     appended = Counter(i.dsts[0].split("/")[1] for i in plan.items if i.action == P.APPEND)
     assert appended == {"2026-09-14-ElephantTrunkNebula-2600MC-Z61": 8, "2026-09-13-ElephantTrunkNebula-2600MC-Z61": 1,
-                        "2026-09-15-HeartNebula-2600MC-Z61": 9, "2026-04-11-OrionNebula-2600MC-RC6": 4}
+                        "2026-09-15-HeartNebula-2600MC-Z61": 9}
 
 
 def test_truncated_nas_copy(plan):
