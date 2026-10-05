@@ -146,3 +146,22 @@ def test_links_already_on_the_live_share_are_not_added(tmp_path):
     kinds = {(c.kind, c.path): c.status for c in catalog.preview(cfg).changes}
     assert ("link-add", "102-ByICNumber/IC1848-SoulNebula") not in kinds
     assert kinds[("link-add", f"103-ByDate/{SOUL.split('/')[1]}")] == "add"      # not on either: still added
+
+
+def test_catalog_preview_as_a_job_reports_progress(tmp_path):
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from astro_ingest.api import create_app
+    cfg, root, bid = copied(tmp_path)
+    client = TestClient(create_app(cfg))
+    job = client.post("/api/catalog/preview").json()["job_id"]
+    for _ in range(300):
+        snap = client.get(f"/jobs/{job}").json()
+        if snap["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.05)
+    assert snap["status"] == "succeeded", snap
+    assert snap["result"]["summary"]["batches"] == [bid] and snap["result"]["summary"]["writes"] > 0
+    assert snap["result"] == client.get("/api/catalog/preview").json()

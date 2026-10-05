@@ -98,7 +98,7 @@ def _unified(old: str | None, new: str, path: str) -> str:
     return "\n".join(difflib.unified_diff(strip(old), strip(new), f"{path} (now)", f"{path} (new)", lineterm="", n=1))
 
 
-def preview(cfg: Config, today: dt.date | None = None) -> Preview:
+def preview(cfg: Config, today: dt.date | None = None, progress=lambda *a, **k: None) -> Preview:
     today = today or dt.datetime.now(cfg.tz).date()
     roots = _roots(cfg)
     batches = db.uncatalogued_batches(cfg)
@@ -122,10 +122,12 @@ def preview(cfg: Config, today: dt.date | None = None) -> Preview:
             if sess in received:
                 borrowed[sess] = src
 
+    progress(2, "reading the NAS", phase="index")
     index = service.nas_index(cfg)
     sessions_all = sorted({s.rel for s in index.sessions} | touched)
 
     # sessions whose library match may change because a new dark/bias batch arrived
+    progress(10, "checking which sessions new library frames affect", phase="library")
     for folder in sorted(lib_folders):
         parts = folder.split("/")
         cam = parts[1] if len(parts) > 1 else ""
@@ -138,7 +140,10 @@ def preview(cfg: Config, today: dt.date | None = None) -> Preview:
     changes: list[Change] = []
     lib = _library(roots)
     gaps, objects_by_target = [], {}
-    for s in sorted(touched):
+    todo_sessions = sorted(touched)
+    for n, s in enumerate(todo_sessions, 1):
+        progress(15 + 75 * (n - 1) / max(len(todo_sessions), 1), f"PROJECT_INFO for {s}", phase="sessions",
+                 sessions_done=n - 1, sessions_total=len(todo_sessions))
         frames, other, notes = projinfo.scan_session(roots, s)
         text = projinfo.render(s, frames, other, notes, lib, cfg.tz, today)
         rel = f"{s}/PROJECT_INFO.txt"
@@ -179,6 +184,8 @@ def preview(cfg: Config, today: dt.date | None = None) -> Preview:
     # index links + ZZ_TARGET_INDEX.md
     root = Path(cfg.astro_root)
     all_rows = rows + new_rows
+    progress(92, "checking the index links", phase="links", sessions_done=len(todo_sessions),
+             sessions_total=len(todo_sessions))
     want = links.wanted(root, all_rows)
     add, remove = links.diff(root, want)
     # dev: the sandbox holds only part of the share; a link the live share already has isn't "missing"
@@ -249,7 +256,7 @@ def run(cfg: Config, pv: Preview, progress=lambda *a, **k: None) -> dict:
     order = {"targets-csv": 0, "project-info": 1, "notes": 2, "flats-note": 3, "link-remove": 4, "link-add": 5, "index-md": 6}
     with fsops.WriteLock(cfg, f"catalog {stamp}"), open(log_path, "a") as log:
         for n, c in enumerate(sorted(todo, key=lambda c: order[c.kind]), 1):
-            progress(n / max(len(todo), 1) * 100, f"{c.kind}: {c.path}")
+            progress(n / max(len(todo), 1) * 100, f"{c.kind}: {c.path}", written=n - 1, to_write=len(todo))
             if c.kind == "targets-csv":
                 status = fsops.replace_source_file(cfg, c.path, c.text, stamp)
             elif c.kind in ("project-info", "index-md"):

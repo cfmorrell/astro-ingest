@@ -544,8 +544,15 @@ function qualityToolbar(group, items) {
 // ---------- stepper ----------
 
 function catalogAvailable() {
-  // Catalog follows a copy: reachable once a copy batch is waiting to be catalogued, or was catalogued in this view
-  return state.passed.has("catalog") || state.batches.some((b) => (b.status === "done" || b.status === "failed") && !b.catalogued_at);
+  // Catalog follows a copy: reachable once a copy batch is waiting to be catalogued, or was catalogued in this view,
+  // or when there's nothing to copy at all (a clean-up-only run steps straight through)
+  return state.passed.has("catalog") || state.batches.some((b) => (b.status === "done" || b.status === "failed") && !b.catalogued_at) ||
+    nothingToCopy();
+}
+
+function nothingToCopy() {
+  const pv = state.copyPreview;
+  return !!pv && !pv.copies && !pv.unfinished_batch;
 }
 
 function stepStatus(step) {
@@ -629,13 +636,17 @@ function renderStepBar() {
     if (state.qualityRunning) blocked = "Scoring light frames…";
   } else if (step === "copy" && state.copyPreview) {
     const pv = state.copyPreview;
-    parts.push(pv.copies ? [b(`${pv.copies} file${pv.copies === 1 ? "" : "s"}`), ` ready to copy · ${gb(pv.bytes)}`] : [b("Nothing left to copy")]);
+    parts.push(pv.copies ? [b(`${pv.copies} file${pv.copies === 1 ? "" : "s"}`), ` ready to copy · ${gb(pv.bytes)}`] : [b("Nothing to copy"), " · Next goes on to Catalog"]);
     if (state.copyRunning) blocked = "Copying…";
-    else if (!catalogAvailable()) blocked = "Copy something first";
+    else if (!catalogAvailable()) blocked = "Copy the frames above first";
+  } else if (step === "catalog" && !state.catalogPreview) {
+    parts.push(["Working out what to write…"]);
+    blocked = "Working out what to write…";
   } else if (step === "catalog" && state.catalogPreview) {
     const s = state.catalogPreview.summary;
     parts.push(s.writes ? [b(`${s.writes} catalog update${s.writes === 1 ? "" : "s"}`), " to write"] : [b("Catalog up to date")]);
     if (state.catalogRunning) blocked = "Writing…";
+    else if (state.catalogLoading) blocked = "Working out what to write…";
     else if (catalogPending()) blocked = "Write the catalog updates first";
   } else if (step === "clean" && state.cleanPreview) {
     const sel = cleanSelected();
@@ -1274,16 +1285,37 @@ function diffBlock(text) {
 }
 
 async function loadCatalog() {
-  setStepBadge("catalog-status-badge", "", "reading the NAS…");
-  try {
-    state.catalogPreview = await api("GET", "/api/catalog/preview");
-  } catch (e) {
+  // Working out what to write re-reads every touched session's frame headers: a job with a status bar
+  if (state.catalogLoading) return;
+  state.catalogLoading = true;
+  setStepBadge("catalog-status-badge", "accent", "reading the NAS…");
+  const label = document.getElementById("catalog-progress-label");
+  label.textContent = "Working out what to write…";
+  renderStepBar();
+  const fail = (msg) => {
     setStepBadge("catalog-status-badge", "danger", "error");
     const box = document.getElementById("catalog-summary");
     box.innerHTML = "";
-    box.appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e)]));
-    return;
+    box.appendChild(el("div", { class: "error-banner" }, ["✕ ", msg]));
+  };
+  try {
+    const { job_id } = await api("POST", "/api/catalog/preview");
+    await pollJob(job_id, document.getElementById("catalog-progress"), async (snap) => {
+      if (snap.status === "succeeded") state.catalogPreview = snap.result;
+      else fail(snap.error || "couldn't work out the catalog");
+    }, (snap) => {
+      const st = snap.stats || {};
+      label.textContent = st.phase === "sessions" && st.sessions_total
+        ? `Working out what to write: PROJECT_INFO for session ${st.sessions_done + 1} of ${st.sessions_total} (re-reads each session's frame headers)`
+        : st.phase === "links" ? "Working out what to write: checking the index links"
+        : st.phase === "library" ? "Working out what to write: which sessions new library frames affect"
+        : "Working out what to write: reading the NAS";
+    });
+  } catch (e) {
+    fail(String(e.message || e));
   }
+  state.catalogLoading = false;
+  label.textContent = "";
   renderCatalog();
   renderStepper();
 }
@@ -1370,14 +1402,20 @@ async function watchCatalogJob(jobId) {
   state.catalogRunning = true;
   btn.disabled = true;
   btn.textContent = "Writing…";
+  const label = document.getElementById("catalog-progress-label");
+  label.textContent = "Writing catalog updates…";
   await pollJob(jobId, document.getElementById("catalog-progress"), async (snap) => {
     state.catalogRunning = false;
+    label.textContent = "";
     if (snap.status === "succeeded") { renderCatalogResult(snap.result); state.passed.add("catalog"); }
     else {
       document.getElementById("catalog-result").innerHTML = "";
       document.getElementById("catalog-result").appendChild(el("div", { class: "error-banner" }, ["✕ ", snap.error || "catalog failed"]));
     }
     await loadCatalog();
+  }, (snap) => {
+    const st = snap.stats || {};
+    if (st.to_write) label.textContent = `Writing catalog updates: ${st.written} of ${st.to_write}`;
   });
 }
 

@@ -310,6 +310,16 @@ def create_app(cfg: Config) -> FastAPI:
     def catalog_preview():
         return catalog.preview(cfg).to_dict()
 
+    @app.post("/api/catalog/preview")
+    def catalog_preview_job():
+        """Work out what Catalog would write, as a job with progress (it re-reads every touched session's frame
+        headers, which can take a while). Read-only; an already running one is reused."""
+        job = jobs.running("catalog-preview")
+        if job is None:
+            job = jobs.create_python_job(lambda progress: catalog.preview(cfg, progress=progress).to_dict(),
+                                         Path(cfg.state_dir) / "logs" / "jobs", kind="catalog-preview")
+        return {"job_id": job.id}
+
     @app.post("/api/catalog/run")
     def catalog_run():
         if busy():
