@@ -38,6 +38,12 @@ def open_source(cfg: Config, override: str | Path | None = None) -> Source:
         device = remembered_device(cfg)
         if not device:
             raise SourceUnavailable("no capture device picked yet: run `astro-ingest find`")
+        if device.get("kind") == "upload":     # a folder on the browser's computer (sources/upload.py)
+            from astro_ingest.sources.upload import UploadSource
+            try:
+                return UploadSource(cfg, device["slug"])
+            except FileNotFoundError as exc:
+                raise SourceUnavailable(str(exc)) from exc
         return _smb(device["host"], device["share"])
     root = Path(override) if override else cfg.asiair_root
     if not root.is_dir():

@@ -763,11 +763,13 @@ function renderConnect() {
             isSel ? el("span", { class: `badge ${online ? "accent" : "danger"}` }, [online ? "currently selected" : "not answering"]) : null,
             (dv.found || []).some((d) => d.host === r.host) ? el("span", { class: "badge ok" }, ["found in this search"]) : null,
           ]),
-          el("span", { class: "session-path" }, [`${r.host}${last ? ` · last connected ${last}` : ""}`]),
+          el("span", { class: "session-path" }, [`${r.kind === "upload" ? "folder on this computer" : r.host}${last ? ` · last ${r.kind === "upload" ? "used" : "connected"} ${last}` : ""}`]),
         ]),
         el("div", { style: "display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;" }, [
           isSel && online ? el("span", { class: "badge ok" }, ["connected"])
-            : el("button", { class: `small${!online && n === 0 ? " primary" : ""}`, disabled: busy ? "" : null, onclick: () => connectTo(r.host, null, r.nickname || r.label) }, ["Connect"]),
+            : el("button", { class: `small${!online && n === 0 ? " primary" : ""}`, disabled: busy ? "" : null,
+              title: r.kind === "upload" ? "pick the folder again: the page can only read a folder you pick" : null,
+              onclick: () => (r.kind === "upload" ? useFolder() : connectTo(r.host, null, r.nickname || r.label)) }, [r.kind === "upload" ? "Use…" : "Connect"]),
           name,
           el("button", { class: "small", disabled: busy ? "" : null, onclick: () => renameDevice(r.host, name.value) }, ["Rename"]),
           el("button", { class: "small", disabled: busy ? "" : null, onclick: () => forgetDevice(r) }, ["Forget"]),
@@ -775,6 +777,14 @@ function renderConnect() {
       ]));
     });
   }
+
+  // a folder on this computer (proposal N1)
+  body.appendChild(el("div", { class: "night-block", style: "margin-top:12px;" }, [
+    el("div", { style: "display:flex; gap:10px; align-items:center; flex-wrap:wrap;" }, [
+      el("button", { disabled: busy ? "" : null, onclick: useFolder }, ["Use a folder on this computer…"]),
+    ]),
+    el("div", { class: "hint", style: "margin:6px 0 0;" }, ["A folder of FITS files on the computer you're using now, e.g. a NINA session. The page finds every FITS file under it and reads their headers; Stage uploads the frames you select. Nothing on that computer is changed or deleted."]),
+  ]));
 
   // search the home network (or ask which one it is)
   const net = dv.network;
@@ -951,6 +961,25 @@ function renderScan() {
     if (!quiet) kids.push(el("div", { class: "sel" }, [t.fresh ? `${t.selected} of ${t.fresh} new selected` : "nothing new"]));
     return el("div", { class: `stat${quiet ? " quiet" : ""}` }, kids);
   };
+  document.getElementById("scan-title").textContent = isFolderSource() ? `What's in ${state.devices.remembered.nickname || "the folder"}` : "What's on the ASIAIR";
+  if (isFolderSource()) {
+    const byKind = {};
+    p.items.forEach((i) => {
+      const k = i.kind ? (i.kind === "DarkFlat" ? "Dark flats" : `${i.kind}${i.kind === "Bias" ? "" : "s"}`) : "Not identified";
+      const t = byKind[k] = byKind[k] || { n: 0, bytes: 0, fresh: 0, selected: 0 };
+      t.n += 1; t.bytes += i.size;
+      if (stageable.includes(i.action) || i.action === "excluded") t.fresh += 1;
+      if (stageable.includes(i.action)) t.selected += 1;
+    });
+    body.appendChild(el("div", { class: "folder-groups" }, [el("div", { class: "folder-group" }, [
+      el("div", { class: "folder-group-h" }, ["FITS frames found, by type (from their headers, or their names)"]),
+      el("div", { class: "stat-row" }, Object.keys(byKind).sort().map((k) => el("div", { class: `stat${k === "Not identified" ? " quiet" : ""}` }, [
+        el("div", { class: "num" }, [String(byKind[k].n)]), el("div", { class: "lbl" }, [`${k} · ${gb(byKind[k].bytes)}`]),
+        el("div", { class: "sel" }, [byKind[k].fresh ? `${byKind[k].selected} of ${byKind[k].fresh} new selected` : "nothing new"]),
+      ]))),
+    ])]));
+    return;
+  }
   const capture = CAPTURE_FOLDERS;
   const other = Object.keys(byTop).filter((t) => !CAPTURE_FOLDERS.includes(t)).sort();
   body.appendChild(el("div", { class: "folder-groups" }, [
@@ -1051,7 +1080,8 @@ function renderSelect() {
         class: `thumb-tile${item.action === "excluded" ? " excluded" : ""}`,
         title: `${basename(item.src)} — ${stampLabel(captureStamp(item.src))}${item.action === "excluded" ? " (left out: click to include)" : " (click to leave out)"}`,
         onclick: () => toggleExclusions([item], item.action !== "excluded"),
-      }, item.thumb ? [el("img", { src: `/api/thumb?rel=${encodeURIComponent(item.thumb)}`, alt: "", loading: "lazy" }, [])] : []);
+      }, item.thumb ? [el("img", { src: `/api/thumb?rel=${encodeURIComponent(item.thumb)}`, alt: "", loading: "lazy" }, [])]
+        : [el("div", { class: "thumb-label" }, [basename(item.src).replace(/\.(fits?|fts)$/i, "")])]);
       return tile;
     }));
     box.appendChild(el("div", { class: "card" }, [
@@ -1132,7 +1162,9 @@ function renderStage(live) {
     prog.querySelector(".msg").textContent = !selected.length ? "" : toRead.length ? "ready to stage" : "all selected frames are staged";
   }
   const btn = document.getElementById("stage-run-btn");
-  btn.textContent = scoring ? "Scoring light frames…" : live ? "Staging…" : toRead.length ? `Stage ${toRead.length} frame${toRead.length === 1 ? "" : "s"}` : "Everything selected is staged";
+  document.getElementById("stage-title").textContent = isFolderSource() ? "Upload the selected frames into staging" : "Read the selected frames into staging";
+  btn.textContent = isFolderSource() ? (live ? "Uploading…" : toRead.length ? `Upload ${toRead.length} frame${toRead.length === 1 ? "" : "s"} from this computer` : "Everything selected is uploaded")
+    : scoring ? "Scoring light frames…" : live ? "Staging…" : toRead.length ? `Stage ${toRead.length} frame${toRead.length === 1 ? "" : "s"}` : "Everything selected is staged";
   btn.classList.toggle("primary", !!(live || toRead.length));
   if (!state.stageRunning) btn.disabled = toRead.length === 0;
   setStepBadge("stage-status-badge", live ? "accent" : toRead.length ? "" : "ok", scoring ? "scoring…" : live ? "staging…" : toRead.length ? "not staged" : (selected.length ? "staged" : "nothing selected"));
@@ -1158,6 +1190,7 @@ async function watchStageJob(jobId) {
 }
 
 async function runStage() {
+  if (isFolderSource()) return uploadFrames();
   try {
     const { job_id } = await api("POST", "/api/stage/run");
     await watchStageJob(job_id);
@@ -1501,7 +1534,9 @@ function renderCleanStep() {
     !c.groups.some((g) => g.recommended && g.selectable && g.items.some((i) => !state.cleanTicked.has(i.rel)));
   const guard = document.getElementById("clean-guard");
   guard.innerHTML = "";
-  if (!c.device_delete_allowed) guard.appendChild(el("div", { class: "session-mismatch-warning" }, [
+  if (isFolderSource()) guard.appendChild(el("div", { class: "hint", style: "color:var(--text);" }, [
+    "These frames are on your computer: astro-ingest never deletes them, so there's nothing to clean up here. Clean up is for an ASIAIR."]));
+  else if (!c.device_delete_allowed) guard.appendChild(el("div", { class: "session-mismatch-warning" }, [
     "⚠ Deleting from the device is switched off (ALLOW_DEVICE_DELETE is not 1). Everything else on this page works; nothing can be deleted until it's switched on."]));
 
   const byId = Object.fromEntries(c.groups.map((g) => [g.id, g]));
@@ -2127,6 +2162,141 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.getElementById("start-over-modal").style.display !== "none") closeStartOver();
 });
 
+// ---------- a folder on this computer (proposal N1) ----------
+// The app runs on the server and can't see this computer's disk: the browser lists the folder the user picks,
+// reads each FITS file's header, sends that list (the manifest), and later uploads the selected frames.
+
+const FITS_FILE = /\.(fits?|fts)$/i;
+
+function isFolderSource() {
+  return !!(state.devices && state.devices.remembered && state.devices.remembered.kind === "upload");
+}
+
+async function readHeaderRaw(file) {
+  // the FITS header: 2880-byte blocks of 80-character cards, up to and including the END card
+  const BLOCK = 2880;
+  let text = "";
+  for (let off = 0; off < BLOCK * 36; off += BLOCK * 4) {
+    const buf = new Uint8Array(await file.slice(off, off + BLOCK * 4).arrayBuffer());
+    if (!buf.length) break;
+    let chunk = "";
+    for (let i = 0; i < buf.length; i++) chunk += String.fromCharCode(buf[i]);
+    for (let c = 0; c < chunk.length; c += 80) {
+      const card = chunk.slice(c, c + 80);
+      if (/^END\s*$/.test(card)) return text + chunk.slice(0, c + 80);
+    }
+    text += chunk;
+  }
+  return "";   // no END card: not a FITS file the app can read
+}
+
+let folderPicked = null;   // resolves when the user picks (or cancels) a folder
+
+function pickFolder() {
+  const input = document.getElementById("folder-input");
+  input.value = "";
+  return new Promise((resolve) => {
+    folderPicked = resolve;
+    input.click();
+  });
+}
+
+document.getElementById("folder-input").addEventListener("change", (e) => {
+  const files = [...e.target.files];
+  if (folderPicked) { folderPicked(files); folderPicked = null; }
+});
+
+async function useFolder() {
+  const all = await pickFolder();
+  if (!all || !all.length) return;
+  const name = (all[0].webkitRelativePath || all[0].name).split("/")[0];
+  const fits = all.filter((f) => FITS_FILE.test(f.name) && !f.name.startsWith("."));
+  const relOf = (f) => (f.webkitRelativePath || f.name).split("/").slice(1).join("/") || f.name;
+  state.uploadFiles = new Map(fits.map((f) => [relOf(f), f]));
+  state.uploadName = name;
+  state.connectMsg = null;
+  const manifest = [];
+  let done = 0;
+  const next = async () => {
+    while (done < fits.length) {
+      const f = fits[done++];
+      manifest.push({ rel: relOf(f), size: f.size, mtime: f.lastModified / 1000, header_raw: await readHeaderRaw(f) });
+      state.connectBusy = `Reading ${name}: ${manifest.length} of ${fits.length} FITS files (headers only)…`;
+      if (manifest.length % 20 === 0 || manifest.length === fits.length) renderConnect();
+    }
+  };
+  state.connectBusy = `Reading ${name}: found ${fits.length} FITS file${fits.length === 1 ? "" : "s"} in ${all.length} files…`;
+  renderConnect();
+  if (!fits.length) {
+    state.connectBusy = null;
+    state.connectMsg = { ok: false, text: `No FITS files (.fit, .fits, .fts) anywhere in ${name}.` };
+    renderConnect();
+    return;
+  }
+  await Promise.all(Array.from({ length: Math.min(8, fits.length) }, next));
+  try {
+    const res = await api("POST", "/api/upload/manifest", { name, files: manifest });
+    await afterConnect(res, name);
+    state.connectMsg = { ok: true, text: `✓ ${res.message}` };
+    renderConnect();
+  } catch (e) {
+    state.connectBusy = null;
+    state.connectMsg = { ok: false, text: String(e.message || e).replace(/^\d+: "?|"$/g, "") };
+    renderConnect();
+  }
+}
+
+function uploadOne(rel, file, onBytes) {
+  // XHR rather than fetch: it reports upload progress
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", `/api/upload/file?rel=${encodeURIComponent(rel)}`);
+    xhr.upload.onprogress = (e) => onBytes(e.loaded);
+    xhr.onload = () => (xhr.status === 200 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(`${xhr.status}: ${xhr.responseText}`)));
+    xhr.onerror = () => reject(new Error("the upload was interrupted"));
+    xhr.send(file);
+  });
+}
+
+async function uploadFrames() {
+  // Stage for a folder source: upload each selected frame into staging (checksummed on the server as it arrives)
+  const res = document.getElementById("stage-result");
+  res.innerHTML = "";
+  let need = selectedItems().filter((i) => !i.staged);
+  if (need.some((i) => !state.uploadFiles || !state.uploadFiles.has(i.src))) {
+    // after a reload the page can't reach the files any more: browsers only give access to a folder you pick
+    res.appendChild(el("div", { class: "session-mismatch-warning" }, [
+      `⚠ Pick the folder ${state.devices.remembered.nickname || ""} again so the page can read the frames (browsers only give a page access to a folder you've just picked). `,
+      el("button", { class: "small", onclick: async () => { await useFolder(); goTo("stage"); } }, ["Pick the folder"]),
+    ]));
+    return;
+  }
+  const total = need.reduce((a, i) => a + i.size, 0);
+  const started = performance.now();
+  let doneBytes = 0;
+  state.stageRunning = true;
+  document.getElementById("stage-run-btn").disabled = true;
+  try {
+    for (let n = 0; n < need.length; n++) {
+      const it = need[n];
+      await uploadOne(it.src, state.uploadFiles.get(it.src), (loaded) => {
+        const sec = (performance.now() - started) / 1000;
+        const sent = doneBytes + loaded;
+        const rate = sec > 1 ? sent / 1e6 / sec : null;
+        renderStage({ files_done: n, files_total: need.length, bytes_done: sent, bytes_total: total,
+          mb_s: rate ? Math.round(rate * 10) / 10 : null, eta_s: rate ? (total - sent) / 1e6 / rate : null });
+      });
+      doneBytes += it.size;
+    }
+    state.lastStage = { seconds: (performance.now() - started) / 1000 };
+    state.passed.add("stage");
+  } catch (e) {
+    res.appendChild(el("div", { class: "error-banner" }, ["✕ ", String(e.message || e), " (press Upload again to continue)"]));
+  }
+  state.stageRunning = false;
+  await loadPlan(false);
+}
+
 // ---------- load ----------
 
 function applyPlan(plan, keepScroll) {
@@ -2172,7 +2342,7 @@ function renderDevicePill(searching) {
     label = `Local folder ${dv.local_root ? basename(dv.local_root) : ""}`;
   } else if (dv && dv.remembered) {
     const name = dv.remembered.nickname || dv.remembered.label || "ASIAIR";
-    ip = dv.remembered.host;
+    ip = dv.remembered.kind === "upload" ? null : dv.remembered.host;
     if (h && h.source_online) { cls = "ok"; label = name; }
     else if (h) { cls = "danger"; label = `${name} isn't answering`; }
     else { label = name; }

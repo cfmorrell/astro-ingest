@@ -131,3 +131,28 @@ def asiair_frame(root: Path, folder: str, type_: str, saved_local: str, exposure
     if thumb:
         path.with_name(path.stem + "_thn.jpg").write_bytes(b"\xff\xd8\xff\xd9")
     return path
+
+
+def nina_frame(root, target: str, kind: str, start_local: str, exposure_s: float = 300.0, filter_: str = "L",
+               seq: int = 1, temp_c: float = -10.0, tz: str = "America/New_York", instrument: str = "ZWO ASI2600MC Pro",
+               focal_mm: float = 1370.0, data=None, headers: bool = True, **cards):
+    """Write a frame the way NINA saves it by default: <target>/<date>/<TYPE>/<datetime>_<filter>_<temp>_<exp>s_<n>.fits.
+
+    `start_local` is the local start of the exposure ('2026-10-04T21:30:15'). With headers=False only SIMPLE..NAXIS
+    are written (to test inference from the path alone)."""
+    import datetime as dt
+    from pathlib import Path
+    from zoneinfo import ZoneInfo
+
+    start = dt.datetime.fromisoformat(start_local)
+    utc = start.replace(tzinfo=ZoneInfo(tz)).astimezone(dt.timezone.utc)
+    night = (start - dt.timedelta(hours=12)).date().isoformat()
+    name = f"{start:%Y-%m-%d_%H-%M-%S}_{filter_}_{temp_c:.2f}_{exposure_s:.2f}s_{seq:04d}.fits"
+    path = Path(root) / target / night / kind.upper() / name
+    hdr = {"IMAGETYP": kind.upper(), "EXPOSURE": exposure_s, "EXPTIME": exposure_s, "DATE-LOC": start.isoformat(),
+           "DATE-OBS": utc.strftime("%Y-%m-%dT%H:%M:%S"), "XBINNING": 1, "YBINNING": 1, "GAIN": 100, "OFFSET": 50,
+           "CCD-TEMP": temp_c, "INSTRUME": instrument, "TELESCOP": "6in RC", "FOCALLEN": focal_mm, "FILTER": filter_}
+    if kind.upper() == "LIGHT":
+        hdr["OBJECT"] = target
+    hdr.update(cards)
+    return write_fits(path, hdr if headers else {}, data=data)

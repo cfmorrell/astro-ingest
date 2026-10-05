@@ -173,6 +173,10 @@ class StagedSource:
     def __init__(self, source: Source, cfg: Config, slug: str, local: bool):
         self.source, self.cfg, self.slug, self.local = source, cfg, slug, local
         self.label = source.label
+        self.layout = getattr(source, "layout", "asiair")          # "folder": any layout (sources/upload.py)
+        self.deletable = getattr(source, "deletable", True)
+        if hasattr(source, "header_for"):
+            self.header_for = source.header_for
         self.store = StagingStore(cfg)
         self._entries: dict[str, SourceEntry] = {}
 

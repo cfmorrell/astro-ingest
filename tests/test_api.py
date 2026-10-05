@@ -260,3 +260,53 @@ def test_health_without_the_device(tmp_path):
     # the container's healthcheck: never waits on the (often switched off) ASIAIR
     client, air, root = make_app(tmp_path)
     assert client.get("/health", params={"device": "0"}).json() == {"status": "ok", "version": VERSION}
+
+
+def test_a_folder_on_this_computer_end_to_end(tmp_path):
+    # a NINA session on the capture PC: the page sends a manifest, then uploads; nothing on that computer is deleted
+    import time
+
+    from fitsgen import nina_frame
+
+    nina, nas, root = tmp_path / "nina", tmp_path / "nas", tmp_path / "sandbox"
+    for d in (nas, root / "Z95-ClaudeReferences"):
+        d.mkdir(parents=True)
+    (root / "Z95-ClaudeReferences" / "targets.csv").write_text(
+        "folder,name,messier,ngc,ic,other\nSoulNebula-IC1848,SoulNebula,,,1848,\n")
+    for i in range(4):
+        nina_frame(nina, "SoulNebula", "light", f"2026-10-04T21:{10 + 5 * i:02d}:00", seq=i + 1)
+    nina_frame(nina, "SoulNebula", "flat", "2026-10-05T06:30:10", exposure_s=2.5)
+    cfg = Config.from_env({"ASTRO_ROOT": str(root), "ASTRO_NAS": str(nas), "STATE_DIR": str(root / "state"),
+                           "TZ": "America/New_York", "STAGING_DIR": str(tmp_path / "staging")})
+    client = TestClient(create_app(cfg))
+    files = []
+    for p in sorted(nina.rglob("*.fits")):
+        raw = p.read_bytes()
+        files.append({"rel": p.relative_to(nina).as_posix(), "size": len(raw), "mtime": p.stat().st_mtime,
+                      "header_raw": raw[:raw.index(b"END" + b" " * 77) + 80].decode("latin-1")})
+    res = client.post("/api/upload/manifest", json={"name": "NINA-2026-10-04", "files": files}).json()
+    assert res["remembered"]["kind"] == "upload" and "5 FITS file(s)" in res["message"]
+    plan = client.get("/api/plan").json()
+    items = {i["src"]: i for i in plan["items"]}
+    assert len(items) == 5 and all(i["action"] == "copy" and not i["staged"] for i in items.values())
+    assert client.post("/api/stage/run").status_code == 409                 # the page uploads instead
+    for f in files:
+        data = (nina / f["rel"]).read_bytes()
+        bad = client.put("/api/upload/file", params={"rel": f["rel"]}, content=data[:-10])
+        assert bad.status_code == 400                                        # a short upload is refused
+        assert client.put("/api/upload/file", params={"rel": f["rel"]}, content=data).status_code == 200
+    assert client.put("/api/upload/file", params={"rel": "../escape.fits"}, content=b"x").status_code == 404
+    plan = client.get("/api/plan").json()
+    assert all(i["staged"] for i in plan["items"])
+    job = client.post("/api/copy/run").json()["job_id"]
+    for _ in range(300):
+        snap = client.get(f"/jobs/{job}").json()
+        if snap["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.05)
+    assert snap["result"]["copied"] == 5, snap
+    session = next((root / "SoulNebula-IC1848").glob("2026-10-04-SoulNebula-2600MC*"))
+    assert len(list(session.glob("lights-L/*.fits"))) == 4 and len(list(session.glob("flats*/*.fits"))) == 1   # FILTER L
+    clean = client.get("/api/cleanup/preview").json()
+    assert clean["device_delete_allowed"] is False                            # nothing on that computer is deleted
+    assert all(not g["selectable"] for g in clean["groups"])

@@ -77,6 +77,8 @@ class Scan:
 
 def scan(source: Source, tz: ZoneInfo, read_headers: bool = True,
          progress: Callable[[int, int], None] | None = None) -> Scan:
+    if getattr(source, "layout", "asiair") == "folder":
+        return _scan_folder(source, tz, read_headers, progress)
     entries = list(source.walk())
     by_rel = {e.rel: e for e in entries}
     frames: list[SourceFrame] = []
@@ -134,3 +136,38 @@ def _check(frame: SourceFrame, tz: ZoneInfo) -> None:
     if lag is not None:
         frame.warnings.append(
             f"filename time is {lag.total_seconds():+.0f} s from DATE-OBS + exposure: check the ASIAIR clock/time zone")
+
+
+def _scan_folder(source: Source, tz: ZoneInfo, read_headers: bool, progress) -> Scan:
+    """A folder of FITS frames in any layout (e.g. a NINA session): every FITS file anywhere under it is a frame,
+    and what it is comes from its header, or its path (inference.infer_name) unless it's ASIAIR-named."""
+    from astro_ingest.core.inference import FITS_SUFFIXES, infer_name
+    frames: list[SourceFrame] = []
+    others: list[SourceEntry] = []
+    for e in source.walk():
+        name = PurePosixPath(e.rel).name
+        if asiair.is_junk(name) or not name.lower().endswith(FITS_SUFFIXES):
+            others.append(e)          # never ingested, never touched (files on the user's computer)
+            continue
+        frames.append(SourceFrame(e, "handled", asiair.parse_name(name)))
+    header_for = getattr(source, "header_for", None)
+    for i, frame in enumerate(frames):
+        if read_headers:
+            try:
+                if header_for is not None:
+                    frame.header = header_for(frame.rel)
+                else:
+                    with source.open_read(frame.rel) as fh:
+                        frame.header = read_header(fh, frame.rel)
+            except (OSError, HeaderError) as exc:
+                frame.warnings.append(f"cannot read header: {exc}")
+        if frame.name is None:
+            frame.name = infer_name(frame.header, frame.rel, tz, frame.entry.mtime)
+            if frame.name is None:
+                frame.warnings.append("can't tell what this frame is: no IMAGETYP or exposure time in its header "
+                                      "or its name")
+        elif frame.header:
+            _check(frame, tz)
+        if progress:
+            progress(i + 1, len(frames))
+    return Scan(source.label, frames, [], [], others)

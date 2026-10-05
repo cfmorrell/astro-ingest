@@ -15,7 +15,9 @@ The app walks through seven steps, with a step bar at the bottom of the window a
 
 1. **Connect** finds the ASIAIR on your home network (worked out from your browser's address) and remembers recent
    devices by address and a name you give them. Several ASIAIRs look identical on the network, so it never
-   switches devices on its own.
+   switches devices on its own. It can also use **a folder on the computer you're browsing from** (e.g. a NINA
+   session): the page finds every FITS file under it, identifies the frames from their headers, and uploads the
+   ones you select. Nothing on that computer is ever deleted.
 2. **Scan Images** lists the device and reads frame headers in `Autorun/` and `Plan/` (everything else is left
    alone). Frames already on the NAS are recognized by name and size. A grid of the device's own thumbnails is a
    quick first pass: leave out anything obviously bad before it's read.

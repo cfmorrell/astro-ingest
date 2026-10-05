@@ -63,6 +63,14 @@ def _open_device(cfg: Config, slug: str):
     """The source a staging folder came from (a recent device, or the local ASIAIR_ROOT), or None."""
     if slug == "local":
         return LocalDirSource(cfg.asiair_root) if cfg.asiair_root and Path(cfg.asiair_root).is_dir() else None
+    if slug.startswith("upload-"):
+        # uploaded from the user's computer: the originals are still there (nothing deletes them), so these copies
+        # are clearable, as long as the folder's manifest lists them
+        from astro_ingest.sources.upload import UploadSource
+        try:
+            return UploadSource(cfg, slug)
+        except FileNotFoundError:
+            return None
     rec = next((r for r in service.recent_devices(cfg) if (r.get("slug") or staging.device_slug(r, False)) == slug), None)
     return service._smb(rec["host"], rec["share"]) if rec else None
 

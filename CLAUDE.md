@@ -129,6 +129,16 @@ so tell Chris.
     retired files; in dev the sandbox's copy of a path wins over the live share's. Catalog also follows a batch that
     finished with problems (it catalogues what was copied).
 
+29. **A folder on this computer (2026-10-05, N1).** Besides the ASIAIR, a run can start from a folder of FITS files on
+    the computer running the browser (e.g. a NINA session): the page lists it recursively, reads each file's header
+    blocks, and sends a manifest (`/api/upload/manifest`); Stage uploads the selected frames into staging
+    (`/api/upload/file`, BLAKE2b as they arrive). Frames that aren't ASIAIR-named are identified from their headers
+    (IMAGETYP, OBJECT, EXPTIME, FILTER, INSTRUME, DATE-LOC/DATE-OBS, ...), names and folders as a fallback
+    (`core/inference.py`). Clean up never deletes on that computer. FITS only. Written before real NINA data was
+    available: check its ASSUMPTION notes against Chris's first session. Round 5 also: Catalog runs with a status
+    bar, a clean-up-only run steps through, every Catalog checks all index links (broken removed, empty reported);
+    the sample acceptance test plans against a frozen share snapshot (`tests/data/`, `dev/freeze_nas_snapshot.py`).
+
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
 "the Astronomy share", in docs, UI, status names and code (`NasIndex`, `ASTRO_NAS`).

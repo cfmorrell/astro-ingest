@@ -35,7 +35,7 @@
   <section class="step-panel" data-step="scan">
     <div class="card">
       <div class="card-header">
-        <div class="card-title">What's on the ASIAIR</div>
+        <div class="card-title" id="scan-title">What's on the ASIAIR</div>
         <div id="scan-status-badge" class="badge">not scanned</div>
       </div>
       <div id="scan-body"></div>
@@ -60,7 +60,7 @@
   <section class="step-panel" data-step="stage">
     <div class="card">
       <div class="card-header">
-        <div class="card-title">Read the selected frames into staging</div>
+        <div class="card-title" id="stage-title">Read the selected frames into staging</div>
         <div id="stage-status-badge" class="badge">not staged</div>
       </div>
       <div id="stage-summary"></div>
@@ -247,6 +247,9 @@
     </div>
   </div>
 </div>
+
+<!-- a folder on this computer (proposal N1): the browser lists it and reads the files, the server never sees the disk -->
+<input type="file" id="folder-input" webkitdirectory directory multiple style="display:none;" />
 
 <script src="/app.js"></script>
 </body>

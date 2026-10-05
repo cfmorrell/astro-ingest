@@ -122,6 +122,8 @@ def _is_local(source) -> bool:
 
 
 def delete_allowed(cfg: Config, source) -> bool:
+    if getattr(source, "deletable", True) is False:   # a folder on the user's computer: never deleted from
+        return False
     return _is_local(source) or cfg.allow_device_delete
 
 

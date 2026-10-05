@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import threading
 import time
@@ -20,7 +21,7 @@ from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from astro_ingest import analysis, batch, catalog, cleanup, db, jobs, service, staging, startover, state
-from astro_ingest.sources import devices, discover, network
+from astro_ingest.sources import devices, discover, network, upload
 from astro_ingest.config import VERSION, Config
 from astro_ingest.core import imaging
 
@@ -223,6 +224,55 @@ def create_app(cfg: Config) -> FastAPI:
                 cache.pop("plan", None)
         return devices_json(request)
 
+    # ---------------- a folder on the browser's computer (sources/upload.py): manifest, then uploads into staging
+
+    @app.post("/api/upload/manifest")
+    def upload_manifest(request: Request, name: str = Body(...), files: list[dict] = Body(...)):
+        """What the browser found under the folder it was pointed at; connects to it like a device."""
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
+        name = name.strip() or "folder"
+        try:
+            record = upload.save_manifest(cfg, name, files)
+        except (ValueError, KeyError) as e:
+            raise HTTPException(400, str(e)) from e
+        service.remember_device(cfg, upload.device_record(name), name)
+        with lock:
+            cache.pop("plan", None)
+        found.pop("devices", None)
+        n_head = sum(1 for f in record["files"].values() if f["header"])
+        return devices_json(request, f"Found {len(record['files'])} FITS file(s) in {name} "
+                            f"({n_head} with a readable header).")
+
+    @app.put("/api/upload/file")
+    async def upload_one(request: Request, rel: str = Query(...)):
+        """One frame's bytes from the browser, into staging: hashed (BLAKE2b) as it streams in, size-checked."""
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
+        dev = service.remembered_device(cfg)
+        if not dev or dev.get("kind") != "upload":
+            raise HTTPException(409, "not connected to a folder on this computer")
+        try:
+            src = upload.UploadSource(cfg, dev["slug"])
+            rel_, part, dst, want = upload.begin_upload(cfg, src, rel)
+        except (FileNotFoundError, KeyError, ValueError) as e:
+            raise HTTPException(404, f"not in the folder's listing: {rel} ({e})") from e
+        h, n = hashlib.blake2b(), 0
+        with open(part, "wb") as out:
+            async for chunk in request.stream():
+                h.update(chunk)
+                n += len(chunk)
+                out.write(chunk)
+            out.flush()
+            os.fsync(out.fileno())
+        try:
+            res = upload.finish_upload(cfg, src, rel_, part, dst, want, n, h.hexdigest())
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        if isinstance(cache.get("plan"), service.Planned) and hasattr(cache["plan"].source, "reload"):
+            cache["plan"].source.reload()   # the staged copy is read from now on
+        return res
+
     # ---------------- the device's own thumbnails, for the Select grid (small, fast over Wi-Fi)
 
     @app.get("/api/thumb")
@@ -250,6 +300,8 @@ def create_app(cfg: Config) -> FastAPI:
         if busy():
             raise HTTPException(409, f"a {busy()} run is in progress")
         p = planned()
+        if getattr(p.source, "layout", "asiair") == "folder" and not getattr(p.source, "local", False):
+            raise HTTPException(409, "these frames are on your computer: the page uploads them (Stage)")
         src = p.source
         entries = {f.rel: f.entry for f in p.scan.frames}
         store = staging.StagingStore(cfg)
