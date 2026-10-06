@@ -139,6 +139,13 @@ so tell Chris.
     bar, a clean-up-only run steps through, every Catalog checks all index links (broken removed, empty reported);
     the sample acceptance test plans against a frozen share snapshot (`tests/data/`, `dev/freeze_nas_snapshot.py`).
 
+30. **An ASIAIR's SD card and USB drive (2026-10-05).** Each storage is its own share: `EMMC Images` (internal),
+    `TF Images` (SD card), `Udisk Images` (USB drive); older units save to the SD card under `ASIAIR/Autorun|Plan`.
+    `sources/smb.py AsiairSource` reads all present ones as one source: internal paths unchanged, SD-card/USB paths
+    prefixed with the share's name (`TF Images/Plan/Light/...`); `asiair.split_storage` keeps the folder rules
+    (handled folders, deletable paths, structural folders) the same on every storage. The search waits 1.5 s per
+    address (an ASIAIR asleep on Wi-Fi was missed at 0.5 s). Tested read-only on the older ASIAIR at 192.168.1.119.
+
 ## Terminology
 We **ingest** capture data onto the NAS; we don't "archive" it. Say ingest / ingested / already-ingested, "the NAS",
 "the Astronomy share", in docs, UI, status names and code (`NasIndex`, `ASTRO_NAS`).

@@ -16,6 +16,15 @@ from pathlib import PurePosixPath
 
 # Top-level folders on the EMMC Images share
 HANDLED_FOLDERS = ("Autorun", "Plan")
+# The SD card and a USB drive are separate shares; their paths carry the share's name in front
+# ("TF Images/Plan/Light/..."), the internal storage's don't (sources/smb.py AsiairSource).
+STORAGES = ("TF Images", "Udisk Images")
+
+
+def split_storage(rel_path: str) -> tuple[str, str]:
+    """("TF Images", "Plan/Light/x.fit") for an SD-card path; ("", rel_path) for the internal storage."""
+    first, _, rest = rel_path.partition("/")
+    return (first, rest) if first in STORAGES else ("", rel_path)
 # Ignored unless Chris asks for them; never deleted (decision 8)
 IGNORED_FOLDERS = ("Live", "Preview", "Video", "log", "GuidingDarkLibrary", "System Volume Information",
                    "batch_stack_tmp")
@@ -100,7 +109,8 @@ def fit_for_thumb(thumb_path: str) -> str | None:
 
 def folder_category(rel_path: str) -> str:
     """'handled', 'ignored' or 'unknown', from the top-level folder of a path relative to the share root."""
-    top = PurePosixPath(rel_path).parts[0] if rel_path else ""
+    inner = split_storage(rel_path)[1] if rel_path else ""
+    top = PurePosixPath(inner).parts[0] if inner else ""
     if top in HANDLED_FOLDERS:
         return "handled"
     if top in IGNORED_FOLDERS:

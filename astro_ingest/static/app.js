@@ -926,6 +926,15 @@ async function findDevices(subnet) {
 }
 
 const CAPTURE_FOLDERS = ["Autorun", "Plan"];  // the only folders ingested; everything else is listed for reference
+// the SD card and a USB drive are their own shares on the ASIAIR; their paths start with the share's name
+const STORAGES = { "TF Images": "SD card", "Udisk Images": "USB drive" };
+
+function topFolder(src) {
+  // "Plan", or "TF Images/Plan" for the SD card ("(share root)" for files at the top)
+  const parts = src.split("/");
+  if (STORAGES[parts[0]] && parts.length > 2) return `${parts[0]}/${parts[1]}`;
+  return parts.length > 1 ? parts[0] : "(share root)";
+}
 
 function renderScan() {
   // Proposal D: the capture folders (with how many of their new frames are selected), then the rest, dimmed
@@ -944,7 +953,7 @@ function renderScan() {
   const byTop = {};
   const stageable = p.stageable_actions || [];
   p.items.forEach((i) => {
-    const top = i.src.includes("/") ? i.src.slice(0, i.src.indexOf("/")) : "(share root)";
+    const top = topFolder(i.src);
     const t = byTop[top] = byTop[top] || { files: 0, bytes: 0, frames: 0, fresh: 0, selected: 0 };
     t.files += 1 + (i.thumb ? 1 : 0);
     t.bytes += i.size + (i.thumb_size || 0);
@@ -956,7 +965,10 @@ function renderScan() {
   const tile = (top, quiet) => {
     const t = byTop[top];
     // capture folders always show, empty or not ("0 Autorun frames · 0 B")
-    const what = top === "(share root)" ? "files at the top of the share" : `${top} ${t.frames || !t.files ? "frames" : "files"}`;
+    const kind = t.frames || !t.files ? "frames" : "files";
+    const [st, inner] = top.split("/");
+    const what = top === "(share root)" ? "files at the top of the share"
+      : STORAGES[st] ? `${inner} ${kind} on the ${STORAGES[st]}` : `${top} ${kind}`;
     const kids = [el("div", { class: "num" }, [String(t.frames || t.files)]), el("div", { class: "lbl" }, [`${what} · ${gb(t.bytes)}`])];
     if (!quiet) kids.push(el("div", { class: "sel" }, [t.fresh ? `${t.selected} of ${t.fresh} new selected` : "nothing new"]));
     return el("div", { class: `stat${quiet ? " quiet" : ""}` }, kids);
@@ -980,8 +992,10 @@ function renderScan() {
     ])]));
     return;
   }
-  const capture = CAPTURE_FOLDERS;
-  const other = Object.keys(byTop).filter((t) => !CAPTURE_FOLDERS.includes(t)).sort();
+  // the internal storage's Autorun and Plan always show; the SD card's and USB drive's when they hold anything
+  const isCapture = (t) => CAPTURE_FOLDERS.includes(t.split("/").pop()) && (!t.includes("/") || STORAGES[t.split("/")[0]]);
+  const capture = [...CAPTURE_FOLDERS, ...Object.keys(byTop).filter((t) => t.includes("/") && isCapture(t)).sort()];
+  const other = Object.keys(byTop).filter((t) => !isCapture(t)).sort();
   body.appendChild(el("div", { class: "folder-groups" }, [
     el("div", { class: "folder-group" }, [el("div", { class: "folder-group-h" }, ["Capture folders · ingested"]), el("div", { class: "stat-row" }, capture.map((t) => tile(t, false)))]),
     other.length ? el("div", { class: "folder-group" }, [el("div", { class: "folder-group-h" }, ["Other folders · not ingested, never touched"]), el("div", { class: "stat-row" }, other.map((t) => tile(t, true)))]) : null,

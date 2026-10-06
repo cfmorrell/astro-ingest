@@ -462,8 +462,8 @@ def _prune(source, rels: set[str], log) -> list[str]:
     pruned = []
     folders = {str(PurePosixPath(r).parent) for r in rels}
     for d in sorted(folders):
-        parts = d.split("/")
-        if len(parts) != 3 or parts[1] != "Light":
+        inner = PurePosixPath(asiair.split_storage(d)[1]).parts
+        if len(inner) != 3 or inner[1] != "Light":
             continue
         if source.listdir(d):
             continue

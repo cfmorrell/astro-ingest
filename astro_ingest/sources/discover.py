@@ -40,10 +40,12 @@ def port_open(host: str, port: int = SMB_PORT, timeout: float = 0.5) -> bool:
 
 
 def discover(subnet: str, hints: list[str] | None = None, remembered: dict | None = None, full: bool = False,
-             workers: int = 64, port_timeout: float = 0.5, probe: Callable[[str], bool] | None = None,
+             workers: int = 128, port_timeout: float = 1.5, probe: Callable[[str], bool] | None = None,
              ident: Callable[[str], list[Device]] = identify) -> Discovery:
     """Find devices. With a `remembered` device and not `full`, stop as soon as it answers at its address.
     `probe`/`ident` are injectable for tests."""
+    # 1.5 s per address: an ASIAIR asleep on Wi-Fi can drop the first SYN (the retry comes ~1 s later); a 0.5 s timeout
+    # missed one (Chris, 2026-10-05: found by its address, not by the search)
     probe = probe or (lambda h: port_open(h, timeout=port_timeout))
     started = time.monotonic()
     errors: dict[str, str] = {}

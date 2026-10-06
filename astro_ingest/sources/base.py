@@ -54,7 +54,7 @@ def check_deletable(rel: str) -> None:
     parts = PurePosixPath(rel).parts
     if not rel or rel.startswith("/") or any(p in ("", ".", "..") for p in parts) or "\\" in rel:
         raise DeleteRefused(f"odd path: {rel!r}")
-    if asiair.folder_category(rel) != "handled" or len(parts) < 2:
+    if asiair.folder_category(rel) != "handled" or len(PurePosixPath(asiair.split_storage(rel)[1]).parts) < 2:
         raise DeleteRefused(f"outside the capture folders: {rel}")
 
 
@@ -65,5 +65,6 @@ STRUCTURAL = {"Autorun", "Plan", "Autorun/Light", "Autorun/Flat", "Autorun/Dark"
 
 def check_removable_dir(rel: str) -> None:
     check_deletable(rel)
-    if rel in STRUCTURAL or rel.count("/") != 2 or not rel.split("/")[1] == "Light":
+    inner = asiair.split_storage(rel)[1]     # the same rules on the SD card and a USB drive
+    if inner in STRUCTURAL or inner.count("/") != 2 or not inner.split("/")[1] == "Light":
         raise DeleteRefused(f"not an object folder: {rel}")

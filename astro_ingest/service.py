@@ -44,6 +44,12 @@ def open_source(cfg: Config, override: str | Path | None = None) -> Source:
                 return UploadSource(cfg, device["slug"])
             except FileNotFoundError as exc:
                 raise SourceUnavailable(str(exc)) from exc
+        if device["share"] == "EMMC Images":       # an ASIAIR: its internal storage, SD card and USB drive together
+            try:
+                from astro_ingest.sources.smb import AsiairSource
+                return AsiairSource(device["host"])
+            except Exception as exc:
+                raise SourceUnavailable(f"can't reach smb://{device['host']}/EMMC Images: {type(exc).__name__}: {exc}") from exc
         return _smb(device["host"], device["share"])
     root = Path(override) if override else cfg.asiair_root
     if not root.is_dir():

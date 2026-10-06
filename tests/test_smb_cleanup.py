@@ -16,7 +16,7 @@ import pytest
 from test_batch import make
 
 from astro_ingest import cleanup, service
-from astro_ingest.sources.base import DeleteRefused
+from astro_ingest.sources.base import DeleteRefused, check_deletable
 
 REPO = Path(__file__).resolve().parent.parent
 SERVER_PY = os.environ.get("SMBTEST_PYTHON") or str(REPO / ".venv-smbtest" / "bin" / "python")
@@ -30,11 +30,13 @@ def smb_device(tmp_path):
     if not Path(SERVER_PY).exists():
         pytest.skip("no SMB test server venv (python3 -m venv .venv-smbtest && .venv-smbtest/bin/pip install impacket)")
     cfg, air, root = make(tmp_path)
+    tf = tmp_path / "tf"                                                # an SD card, laid out like an older ASIAIR's
+    (tf / "ASIAIR" / "Plan" / "Light").mkdir(parents=True)
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
     s.close()
-    srv = subprocess.Popen([SERVER_PY, str(REPO / "dev" / "smb-test-server.py"), str(air), str(port)],
+    srv = subprocess.Popen([SERVER_PY, str(REPO / "dev" / "smb-test-server.py"), str(air), str(port), f"TF Images={tf}"],
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     try:
         assert srv.stdout.readline().strip() == "ready"
@@ -80,3 +82,36 @@ def test_verify_and_delete_over_smb(smb_device, tmp_path):
             src.delete("Live/anything.fit")
     finally:
         src.close()
+
+
+def test_an_asiair_with_an_sd_card(smb_device, tmp_path):
+    # older ASIAIRs save to the SD card ("TF Images" share, under ASIAIR/); its frames join the internal storage's
+    from fitsgen import asiair_frame
+
+    from astro_ingest.core.scan import scan
+    from astro_ingest.sources.base import check_removable_dir
+    from astro_ingest.sources.smb import AsiairSource
+    cfg, air, port = smb_device
+    tf = tmp_path / "tf"
+    f = asiair_frame(tf / "ASIAIR", "Plan/Light/IC 1805", "Light", "20251004-213000", obj="IC 1805", camera="2600MM",
+                     filter_="H")
+    (tf / ".DS_Store").write_bytes(b"x")                                # outside ASIAIR/: not part of the capture area
+    src = AsiairSource("127.0.0.1", timeout=5, port=port)
+    try:
+        assert src.present() == ["EMMC Images", "TF Images"]            # no USB drive share: skipped
+        rel = f"TF Images/Plan/Light/IC 1805/{f.name}"
+        rels = [e.rel for e in src.walk()]
+        assert rel in rels and not any(r.startswith("TF Images/.DS_Store") for r in rels)
+        assert any(r.startswith("Plan/Light/HeartNebula/") for r in rels)                 # internal paths unchanged
+        assert src.stat(rel).size == f.stat().st_size
+        with src.open_read(rel) as fh:
+            assert fh.read() == f.read_bytes()
+        frame = next(x for x in scan(src, cfg.tz).handled() if x.rel == rel)
+        assert frame.kind == "Light" and frame.name.camera == "2600MM" and frame.thumb is not None
+    finally:
+        src.close()
+    check_deletable(rel)                                                # the same rules on the SD card
+    check_removable_dir("TF Images/Plan/Light/IC 1805")
+    for bad in ("TF Images/Live/x.fit", "TF Images/Plan/Light", "TF Images/x.fit", "Udisk Images/log/a.txt"):
+        with pytest.raises(DeleteRefused):
+            check_removable_dir(bad) if bad.endswith("Light") else check_deletable(bad)

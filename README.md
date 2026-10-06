@@ -18,8 +18,8 @@ The app walks through seven steps, with a step bar at the bottom of the window a
    switches devices on its own. It can also use **a folder on the computer you're browsing from** (e.g. a NINA
    session): the page finds every FITS file under it, identifies the frames from their headers, and uploads the
    ones you select. Nothing on that computer is ever deleted.
-2. **Scan Images** lists the device and reads frame headers in `Autorun/` and `Plan/` (everything else is left
-   alone). Frames already on the NAS are recognized by name and size. A grid of the device's own thumbnails is a
+2. **Scan Images** lists the device and reads frame headers in `Autorun/` and `Plan/`, on the internal storage and,
+   when present, the SD card and a USB drive (everything else is left alone). Frames already on the NAS are recognized by name and size. A grid of the device's own thumbnails is a
    quick first pass: leave out anything obviously bad before it's read.
 3. **Stage** reads each selected frame from the ASIAIR exactly once over Wi-Fi (the slow part, about 9 MB/s) into a
    staging share, checksummed on the way in. Everything after this works from the staged copy at disk speed.
