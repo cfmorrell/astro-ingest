@@ -3,6 +3,7 @@
 import os
 
 from fitsgen import asiair_frame
+from jobwait import wait_job
 from test_batch import SOUL, make, stage_and_score
 
 from astro_ingest import batch, catalog, db, fsops, service
@@ -118,7 +119,6 @@ def test_borrowed_flats_are_copied_and_noted(tmp_path):
 
 
 def test_catalog_through_the_api(tmp_path):
-    import time
 
     from fastapi.testclient import TestClient
 
@@ -128,11 +128,7 @@ def test_catalog_through_the_api(tmp_path):
     pv = client.get("/api/catalog/preview").json()
     assert pv["summary"]["project_info"]["create"] == 2 and "text" not in pv["changes"][0]
     job = client.post("/api/catalog/run").json()["job_id"]
-    for _ in range(500):
-        snap = client.get(f"/jobs/{job}").json()
-        if snap["status"] in ("succeeded", "failed"):
-            break
-        time.sleep(0.02)
+    snap = wait_job(client, job)
     assert snap["status"] == "succeeded", snap
     assert client.get("/api/catalog/preview").json()["summary"]["writes"] == 0
 
@@ -149,7 +145,6 @@ def test_links_already_on_the_live_share_are_not_added(tmp_path):
 
 
 def test_catalog_preview_as_a_job_reports_progress(tmp_path):
-    import time
 
     from fastapi.testclient import TestClient
 
@@ -157,11 +152,7 @@ def test_catalog_preview_as_a_job_reports_progress(tmp_path):
     cfg, root, bid = copied(tmp_path)
     client = TestClient(create_app(cfg))
     job = client.post("/api/catalog/preview").json()["job_id"]
-    for _ in range(300):
-        snap = client.get(f"/jobs/{job}").json()
-        if snap["status"] in ("succeeded", "failed"):
-            break
-        time.sleep(0.05)
+    snap = wait_job(client, job)
     assert snap["status"] == "succeeded", snap
     assert snap["result"]["summary"]["batches"] == [bid] and snap["result"]["summary"]["writes"] > 0
     assert snap["result"] == client.get("/api/catalog/preview").json()

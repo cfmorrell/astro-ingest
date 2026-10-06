@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 from fitsgen import asiair_frame, star_field
+from jobwait import wait_job
 
 from astro_ingest.api import create_app
 from astro_ingest.config import VERSION, Config
@@ -63,14 +64,9 @@ def test_answers_endpoint(tmp_path):
 
 
 def test_quality_job(tmp_path):
-    import time
     client, _, _ = make_app(tmp_path)
     job_id = client.post("/api/quality/run").json()["job_id"]
-    for _ in range(300):
-        snap = client.get(f"/jobs/{job_id}").json()
-        if snap["status"] in ("succeeded", "failed"):
-            break
-        time.sleep(0.02)
+    snap = wait_job(client, job_id)
     assert snap["status"] == "succeeded", snap
     assert snap["result"]["scored"] == 4
     assert "scoring" in client.get(f"/jobs/{job_id}/log").text
@@ -189,9 +185,7 @@ def test_start_over(tmp_path):
     state_dir = root / "state"
     client.get("/api/plan")
     stage = client.post("/api/stage/run").json()
-    for _ in range(200):
-        if client.get(f"/jobs/{stage['job_id']}").json()["status"] in ("succeeded", "failed"):
-            break
+    wait_job(client, stage["job_id"])
     staging = tmp_path / "sandbox" / "_staging"
     assert any(staging.rglob("*.fit"))
     (state_dir / "cache" / "previews").mkdir(parents=True, exist_ok=True)
@@ -235,9 +229,7 @@ def test_start_over_never_deletes_the_last_copy_of_a_frame(tmp_path):
     client, air, root = make_app(tmp_path)
     client.get("/api/plan")
     job = client.post("/api/stage/run").json()["job_id"]
-    for _ in range(200):
-        if client.get(f"/jobs/{job}").json()["status"] in ("succeeded", "failed"):
-            break
+    wait_job(client, job)
     cfg = Config.from_env({"ASTRO_ROOT": str(root), "ASTRO_NAS": str(tmp_path / "nas"), "STATE_DIR": str(root / "state"),
                            "TZ": "America/New_York", "ASIAIR_ROOT": str(air)})
     staged = sorted((tmp_path / "sandbox" / "_staging" / "local").rglob("*.fit"))
@@ -264,7 +256,6 @@ def test_health_without_the_device(tmp_path):
 
 def test_a_folder_on_this_computer_end_to_end(tmp_path):
     # a NINA session on the capture PC: the page sends a manifest, then uploads; nothing on that computer is deleted
-    import time
 
     from fitsgen import nina_frame
 
@@ -299,11 +290,7 @@ def test_a_folder_on_this_computer_end_to_end(tmp_path):
     plan = client.get("/api/plan").json()
     assert all(i["staged"] for i in plan["items"])
     job = client.post("/api/copy/run").json()["job_id"]
-    for _ in range(300):
-        snap = client.get(f"/jobs/{job}").json()
-        if snap["status"] in ("succeeded", "failed"):
-            break
-        time.sleep(0.05)
+    snap = wait_job(client, job)
     assert snap["result"]["copied"] == 5, snap
     session = next((root / "SoulNebula-IC1848").glob("2026-10-04-SoulNebula-2600MC*"))
     assert len(list(session.glob("lights-L/*.fits"))) == 4 and len(list(session.glob("flats*/*.fits"))) == 1   # FILTER L

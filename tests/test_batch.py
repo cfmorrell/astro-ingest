@@ -3,6 +3,7 @@
 import hashlib
 
 from fitsgen import asiair_frame, star_field
+from jobwait import wait_job
 
 from astro_ingest import analysis, batch, db, service, staging
 from astro_ingest.config import Config
@@ -105,7 +106,6 @@ def test_resume_after_interruption(tmp_path):
 
 
 def test_copy_through_the_api(tmp_path):
-    import time
 
     from fastapi.testclient import TestClient
 
@@ -116,11 +116,7 @@ def test_copy_through_the_api(tmp_path):
     pv = client.get("/api/copy/preview").json()
     assert pv["copies"] == 12 and pv["unfinished_batch"] is None and len(pv["destinations"]) == 2
     run = client.post("/api/copy/run").json()
-    for _ in range(500):
-        snap = client.get(f"/jobs/{run['job_id']}").json()
-        if snap["status"] in ("succeeded", "failed"):
-            break
-        time.sleep(0.02)
+    snap = wait_job(client, run["job_id"])
     assert snap["status"] == "succeeded" and snap["result"]["copied"] == 12, snap
     assert snap["stats"]["files_done"] == 12
     assert client.get("/api/copy/preview").json()["copies"] == 0              # re-indexed: nothing left
