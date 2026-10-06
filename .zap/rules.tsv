@@ -2,5 +2,29 @@
 # One rule per line, TAB-separated: <rule id>	<IGNORE|WARN|FAIL>	(<rule name>)
 # Rules not listed keep ZAP's default (WARN). The workflow doesn't fail on WARN; set a rule to FAIL to make the run
 # fail when ZAP finds it. Rule ids are in each alert of the report (and at https://www.zaproxy.org/docs/alerts/).
-# Example, once you've reviewed an alert and decided it doesn't apply to a LAN-only app:
-# 10038	IGNORE	(Content Security Policy (CSP) Header Not Set)
+#
+# Reviewed 2026-10-06 against the first scan; each IGNORE says why it doesn't apply to this app.
+#
+# The app's job is to show the ASIAIR's LAN address and the capture times of frames:
+2	IGNORE	(Private IP Disclosure)
+10096	IGNORE	(Timestamp Disclosure - Unix)
+# Frame names, checksums and job ids look like Base64 to ZAP; nothing secret is encoded:
+10094	IGNORE	(Base64 Disclosure)
+# Words like "TODO" or "user" in app.js comments and strings; reviewed, nothing sensitive:
+10027	IGNORE	(Information Disclosure - Suspicious Comments)
+# Sec-Fetch-* are request headers browsers send; ZAP's own requests lack them. Nothing for the app to fix:
+90005	IGNORE	(Sec-Fetch-* headers missing)
+# 400/404/422 answers to ZAP's attack payloads are the app correctly refusing them (counts only, no data):
+100000	IGNORE	(A Client Error response code was returned by the server)
+# The API scan expects JSON from GET /; that's the HTML page, by design:
+100001	IGNORE	(Unexpected Content-Type was returned)
+# Plain HTTP on the runner; in use, HTTPS comes from Nginx Proxy Manager in front (docs/DEPLOY.md):
+10106	IGNORE	(HTTP Only Site)
+# Informational, describe the app rather than a weakness:
+10109	IGNORE	(Modern Web Application)
+10049	IGNORE	(Storable and Cacheable Content / Non-Storable Content)
+10104	IGNORE	(User Agent Fuzzer)
+#
+# Kept at WARN on purpose:
+# 43 (Source Code Disclosure - File Inclusion) was a false positive on /api/preview?rel= and POST /api/answers
+# (they answered 400/404 and returned no file content), but it's the rule that would catch a real path bug there.

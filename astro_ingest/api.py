@@ -29,6 +29,18 @@ STATIC_DIR = Path(__file__).parent / "static"
 PREVIEW_SIZES = (analysis.THUMB_SIZE, analysis.FULL_SIZE)
 FRAME_KINDS = ("Light", "Flat", "Dark", "Bias", "DarkFlat")
 SESSION_FILE = startover.SESSION_FILE   # the page's place in the flow (step, finished steps, ticks), shared by every window
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                               "img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; "
+                               "base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Cross-Origin-Embedder-Policy": "require-corp",
+}
 LOG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.log")   # a plain file name in STATE_DIR/logs (no paths)
 
 
@@ -41,6 +53,16 @@ def _safe_rel(rel: str) -> str:
 
 def create_app(cfg: Config) -> FastAPI:
     app = FastAPI(title="astro-ingest", version=VERSION)
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        # On every response, the page and its files included (OWASP ZAP findings, 2026-10-06). Everything the page
+        # loads is its own: scripts and styles from this origin only ('unsafe-inline' for styles because the page
+        # sets style attributes), images from this origin (previews, device thumbnails), never framed.
+        response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        return response
     lock = threading.RLock()
     cache: dict[str, service.Planned] = {}
 

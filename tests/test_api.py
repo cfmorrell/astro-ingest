@@ -333,3 +333,13 @@ def test_concurrent_state_writes_dont_collide(tmp_path):
     [t.join() for t in threads]
     assert not errors and state.read_json(tmp_path / "s" / "session.json", None)["i"] == 199
     assert not list((tmp_path / "s").glob("*.part"))
+
+
+def test_security_headers_on_every_response(tmp_path):
+    from astro_ingest.api import SECURITY_HEADERS
+    client, air, root = make_app(tmp_path)
+    for path in ("/", "/app.js", "/styles.css", "/health", "/api/plan", "/nothing-here"):
+        r = client.get(path)
+        for name, value in SECURITY_HEADERS.items():
+            assert r.headers.get(name) == value, (path, name)
+    assert "frame-ancestors 'none'" in SECURITY_HEADERS["Content-Security-Policy"]

@@ -38,15 +38,24 @@ It only ever runs against the throwaway data on the runner.
 ## Reading a report
 
 Each alert has a **risk** (High, Medium, Low, Informational), a **confidence**, a **rule id** (e.g. 10038), the URLs
-and parameters it was seen on, and ZAP's evidence and suggested fix. Expect for this app, at least at first:
+and parameters it was seen on, and ZAP's evidence and suggested fix.
 
-- missing security headers (Content-Security-Policy, anti-clickjacking `X-Frame-Options`, `X-Content-Type-Options`):
-  the app sets none today;
-- no authentication: by design on the LAN, and the reason the deploy guide recommends Nginx Proxy Manager with
-  authentication in front of it;
-- plain HTTP (HTTPS would come from the proxy).
+Server errors (HTTP 500) under attack, or anything High, are the ones to look at first. What the first scan
+(2026-10-06) found, and what came of it:
 
-Server errors (HTTP 500) under attack, or anything High, are the ones to look at first.
+- **a real bug:** a 500 from `POST /api/start-over` racing `PUT /api/session` (both wrote `session.json` through the
+  same temporary file). Fixed in 0.6: every state write gets its own temporary name.
+- **missing security headers** (CSP, `X-Frame-Options`, `X-Content-Type-Options`, cross-origin policies,
+  `Permissions-Policy`): the app sets them on every response since 0.6 (`SECURITY_HEADERS` in `astro_ingest/api.py`).
+  The CSP keeps `'unsafe-inline'` for styles only, because the page sets style attributes; scripts are `'self'` only.
+- **High, "Source Code Disclosure - File Inclusion" (43):** a false positive. The flagged requests were answered
+  400/404 with no file content. Left at WARN because it's the rule that would catch a real path bug.
+- **expected for this app**, set to IGNORE with reasons in `.zap/rules.tsv`: the ASIAIR's private IP, capture
+  timestamps, Base64-looking names, plain HTTP (HTTPS comes from the proxy), client-error counts, and the
+  informational rules.
+
+Not something ZAP can fix: there's no authentication, by design on the LAN, which is why the deploy guide recommends
+Nginx Proxy Manager with authentication in front of it.
 
 ## Tuning
 
