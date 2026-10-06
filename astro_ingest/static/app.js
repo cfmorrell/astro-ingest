@@ -1078,6 +1078,8 @@ function renderSelect() {
     stat(gb(selected.reduce((a, i) => a + i.size, 0)), "selected"),
     stat(roughTime(bytes), `to read over Wi-Fi at ~${p.rate_mb_s} MB/s (${p.rate_kind === "measured" ? "measured" : "typical Wi-Fi"})`, "ok"),
     stat(excluded.length, "left out", excluded.length ? "warn" : ""),
+    // frames already on the NAS aren't in the grid below: say how many, and where they turn up
+    stat(p.items.filter((i) => i.action === "already-ingested").length, "already on the NAS · not shown (checked on Clean up)"),
   ]));
   if (selected.length && toRead.length < selected.length) {
     summary.appendChild(el("div", { class: "hint" }, [`${selected.length - toRead.length} of these are already staged and won't be read again.`]));
