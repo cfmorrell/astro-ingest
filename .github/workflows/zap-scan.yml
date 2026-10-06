@@ -1,0 +1,103 @@
+name: OWASP ZAP security scan
+
+# Starts astro-ingest on the GitHub runner with throwaway generated data (dev/zap/make_fixture.py) and scans it with
+# OWASP ZAP, twice:
+#   - full scan: spiders the web page (with the AJAX spider, since the page builds itself in JavaScript), then
+#     actively attacks what it found;
+#   - API scan: reads FastAPI's /openapi.json and actively attacks every API endpoint.
+# Reports (HTML, Markdown, JSON) are attached to the run as artifacts and the Markdown is shown on the run's summary
+# page. The run doesn't fail on findings (fail_action: false); tune rules in .zap/rules.tsv. docs/SECURITY-SCAN.md
+#
+# NEVER point this at the real app: an active scan sends attack payloads to every endpoint, including the ones that
+# write to the share, start over, and delete from the ASIAIR.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 7 * * 1"      # Mondays 07:00 UTC
+  push:
+    branches: [main]
+    paths:
+      - "astro_ingest/**"
+      - "pyproject.toml"
+      - ".zap/**"
+      - "dev/zap/**"
+      - ".github/workflows/zap-scan.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  zap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      WORLD: ${{ github.workspace }}/zapworld   # throwaway data, inside the checkout so its log can be uploaded
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install astro-ingest
+        run: pip install .
+
+      - name: Make throwaway data (fake ASIAIR, fake share)
+        run: python dev/zap/make_fixture.py "$WORLD"
+
+      - name: Start astro-ingest on the runner
+        run: |
+          export ASTRO_ROOT="$WORLD/astro" ASTRO_NAS="$WORLD/astro" STATE_DIR="$WORLD/state" \
+                 STAGING_DIR="$WORLD/staging" CACHE_DIR="$WORLD/cache" ASIAIR_ROOT="$WORLD/asiair" \
+                 TZ=America/New_York ALLOW_DEVICE_DELETE=0
+          nohup astro-ingest serve --host 0.0.0.0 --port 8000 > "$WORLD/app.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf "http://localhost:8000/health?device=0" && exit 0
+            sleep 1
+          done
+          cat "$WORLD/app.log"; exit 1
+
+      - name: ZAP full scan (the web page)
+        uses: zaproxy/action-full-scan@v0.12.0
+        with:
+          target: "http://localhost:8000/"
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a -j"           # -a: include alpha passive rules; -j: AJAX spider (JavaScript page)
+          fail_action: false
+          allow_issue_writing: false     # true (and issues: write) to keep a GitHub issue updated with the alerts
+          artifact_name: "zap-full-scan"
+
+      - name: Full scan report on the summary page
+        if: always()
+        run: |
+          echo "## ZAP full scan (web page)" >> "$GITHUB_STEP_SUMMARY"
+          [ -f report_md.md ] && cat report_md.md >> "$GITHUB_STEP_SUMMARY" || echo "no report" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p zap-reports && for f in report_html.html report_md.md report_json.json; do [ -f "$f" ] && mv "$f" "zap-reports/full-$f"; done; true
+
+      - name: ZAP API scan (every endpoint in /openapi.json)
+        uses: zaproxy/action-api-scan@v0.9.0
+        with:
+          target: "http://localhost:8000/openapi.json"
+          format: openapi
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a"
+          fail_action: false
+          allow_issue_writing: false
+          artifact_name: "zap-api-scan"
+
+      - name: API scan report on the summary page
+        if: always()
+        run: |
+          echo "## ZAP API scan (/openapi.json)" >> "$GITHUB_STEP_SUMMARY"
+          [ -f report_md.md ] && cat report_md.md >> "$GITHUB_STEP_SUMMARY" || echo "no report" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the app's log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astro-ingest-log
+          path: ${{ env.WORLD }}/app.log
+          if-no-files-found: ignore

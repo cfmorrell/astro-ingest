@@ -83,6 +83,8 @@ of the share (`/astro-sandbox`) and reads the real one read-only. Setup: [`docs/
 
 - Plain FastAPI + a static vanilla-JS page (no build step), `smbprotocol` for the ASIAIR, numpy/astropy/photutils
   for previews and scoring, SQLite for batches. Filing rules live in the pure `astro_ingest/core/` library.
+- Security: an OWASP ZAP active scan runs in GitHub Actions against a throwaway copy of the app
+  ([`docs/SECURITY-SCAN.md`](docs/SECURITY-SCAN.md)).
 - Design notes and every decision so far: [`CLAUDE.md`](CLAUDE.md), [`docs/PLAN.md`](docs/PLAN.md),
   [`docs/ClaudeHandoff.md`](docs/ClaudeHandoff.md).
 - The version is in `astro_ingest/config.py` (shown in the header and `/health`). It goes up by a minor version

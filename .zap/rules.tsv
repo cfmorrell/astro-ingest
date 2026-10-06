@@ -1,0 +1,6 @@
+# OWASP ZAP rule configuration for .github/workflows/zap-scan.yml (docs/SECURITY-SCAN.md).
+# One rule per line, TAB-separated: <rule id>	<IGNORE|WARN|FAIL>	(<rule name>)
+# Rules not listed keep ZAP's default (WARN). The workflow doesn't fail on WARN; set a rule to FAIL to make the run
+# fail when ZAP finds it. Rule ids are in each alert of the report (and at https://www.zaproxy.org/docs/alerts/).
+# Example, once you've reviewed an alert and decided it doesn't apply to a LAN-only app:
+# 10038	IGNORE	(Content Security Policy (CSP) Header Not Set)
