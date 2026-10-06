@@ -310,3 +310,26 @@ def test_a_folder_on_this_computer_end_to_end(tmp_path):
     clean = client.get("/api/cleanup/preview").json()
     assert clean["device_delete_allowed"] is False                            # nothing on that computer is deleted
     assert all(not g["selectable"] for g in clean["groups"])
+
+
+def test_concurrent_state_writes_dont_collide(tmp_path):
+    # found by the ZAP scan: a session save racing Start over renamed the other's .part away (500)
+    import threading
+
+    from astro_ingest import state
+    cfg = Config.from_env({"ASTRO_ROOT": str(tmp_path), "ASTRO_NAS": str(tmp_path), "STATE_DIR": str(tmp_path / "s"),
+                           "TZ": "America/New_York"})
+    errors = []
+
+    def writer(n):
+        try:
+            for i in range(200):
+                state.write_json(cfg, tmp_path / "s" / "session.json", {"w": n, "i": i})
+        except Exception as e:      # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert not errors and state.read_json(tmp_path / "s" / "session.json", None)["i"] == 199
+    assert not list((tmp_path / "s").glob("*.part"))
