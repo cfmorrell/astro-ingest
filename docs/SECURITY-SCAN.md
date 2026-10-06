@@ -50,6 +50,11 @@ Server errors (HTTP 500) under attack, or anything High, are the ones to look at
   The CSP keeps `'unsafe-inline'` for styles only, because the page sets style attributes; scripts are `'self'` only.
 - **High, "Source Code Disclosure - File Inclusion" (43):** a false positive. The flagged requests were answered
   400/404 with no file content. Left at WARN because it's the rule that would catch a real path bug.
+- **second scan (0.6):** the header alerts are gone. New: "SQL Injection" (40018) and "Spring4Shell" (40045), both
+  false positives from timing: while ZAP's other requests had a job running, the same endpoint answered 409 ("a run
+  is in progress") one moment and 400 ("bad value") the next, which ZAP read as its payload changing the result. No
+  value it attacked reaches SQL (every query uses bound parameters), and Spring4Shell is a Java bug. "CSP: style-src
+  unsafe-inline" (10055) is the trade-off noted above.
 - **expected for this app**, set to IGNORE with reasons in `.zap/rules.tsv`: the ASIAIR's private IP, capture
   timestamps, Base64-looking names, plain HTTP (HTTPS comes from the proxy), client-error counts, and the
   informational rules.
@@ -60,6 +65,8 @@ Nginx Proxy Manager with authentication in front of it.
 ## Tuning
 
 - **`.zap/rules.tsv`**: one line per rule id: `IGNORE` (reviewed, doesn't apply), `WARN` (the default), or `FAIL`.
+  `IGNORE` turns an active rule off, but a passive rule still runs and still appears in ZAP's reports; it just no
+  longer counts as a warning or failure in the job's results.
 - **Fail the run on findings:** set `fail_action: true` in the workflow; with it, alerts make the job fail (and rules
   set to `FAIL` always do).
 - **A GitHub issue with the results:** set `allow_issue_writing: true` and add `issues: write` to the workflow's
