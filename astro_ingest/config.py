@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 # Bumped by hand with each release, like astro-stacker. Stays under 1.0 until Chris has run it long enough to
 # trust it. Shown in the UI header and from GET /health.
-VERSION = "0.3"
+VERSION = "0.4"
 
 
 class ConfigError(Exception):
