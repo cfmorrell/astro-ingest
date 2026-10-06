@@ -148,6 +148,7 @@ function el(tag, attrs, children) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (k === "class") node.className = v;
     else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+    else if (k === "style") node.style.cssText = v;   // through the CSSOM: the CSP blocks style attributes
     else if (v !== null && v !== undefined) node.setAttribute(k, v);
   }
   for (const child of children || []) {
@@ -2175,7 +2176,7 @@ document.getElementById("so-go").addEventListener("click", doStartOver);
 document.getElementById("so-keep-answers").addEventListener("change", renderStartOverBody);
 document.getElementById("start-over-modal").addEventListener("click", (e) => { if (e.target.id === "start-over-modal") closeStartOver(); });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.getElementById("start-over-modal").style.display !== "none") closeStartOver();
+  if (e.key === "Escape" && document.getElementById("start-over-modal").style.display === "flex") closeStartOver();
 });
 
 // ---------- a folder on this computer (proposal N1) ----------

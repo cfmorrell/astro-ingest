@@ -1723,3 +1723,21 @@ details > summary.toggle-adv::-webkit-details-marker { display: none; }
   word-break: break-all;
   line-height: 1.3;
 }
+
+/* What used to be style attributes in index.html: the Content-Security-Policy allows no inline styles
+   (api.py SECURITY_HEADERS). ID selectors (or two classes) so these win over the base rules above, as the
+   inline styles did. Elements that start hidden are shown by app.js setting element.style.display. */
+#app-banner, #quality-progress, #decisions-card, #library-card, #copy-notincluded-card, #catalog-gaps-card,
+#catalog-log-card, #stepbar-delete, #lightbox-exclude-row, #start-over-modal, #folder-input { display: none; }
+.inline-row { display: flex; gap: 8px; align-items: center; }
+.inline-row.gap-10 { gap: 10px; }
+.hint.flush-top { margin-top: 0; }
+.field-row.align-end { align-items: flex-end; margin-top: 12px; }
+.field-row .field.field-fixed { flex: 0 0 auto; margin-bottom: 0; }
+#connect-msg, #stepbar-why { margin: 0; }
+#scanned-at { margin-left: 8px; }
+#quality-progress { margin: 0 0 14px; }
+#quality-progress-label, #catalog-progress-label { margin: 0 0 6px; color: var(--text); }
+#quality-sigma { width: 220px; }
+#quality-status { margin-bottom: 0; }
+#so-title { font-size: 15px; }

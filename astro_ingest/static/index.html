@@ -9,12 +9,12 @@
 <body>
 <header class="topbar">
   <div><a href="#" id="brand-link" class="brand">astro-ingest</a><span id="app-version" class="version-badge"></span><span class="brand-sub">pull · file · clean</span></div>
-  <div style="display:flex; gap:8px; align-items:center;">
+  <div class="inline-row">
     <button id="start-over-btn" class="small" title="Clear this run and go back to Connect">Start over</button>
     <span id="device-pill" class="pill" title=""><span class="dot"></span><span class="pill-text">Checking…</span></span>
   </div>
 </header>
-<div id="app-banner" class="error-banner app-banner" style="display:none;"></div>
+<div id="app-banner" class="error-banner app-banner"></div>
 
 <main>
   <div class="stepper" id="stepper"></div>
@@ -24,7 +24,7 @@
     <div class="card">
       <div class="card-header">
         <div class="card-title">Capture device</div>
-        <div id="connect-msg" class="hint" style="margin:0;"></div>
+        <div id="connect-msg" class="hint"></div>
       </div>
       <div id="connect-body"></div>
       <p class="hint">Looks for capture devices on your home network (today: ZWO ASIAIR). Searching or connecting only logs in as guest and lists the top of the device's share; nothing on it is opened, changed or deleted.</p>
@@ -41,7 +41,7 @@
       <div id="scan-body"></div>
       <div class="progress-wrap">
         <button id="rescan-btn" class="ghost">↻ Scan again</button>
-        <span id="scanned-at" class="hint" style="margin-left:8px;"></span>
+        <span id="scanned-at" class="hint"></span>
       </div>
       <p class="hint">Scanning only reads: it lists every file and reads frame headers in Autorun/ and Plan/, on the ASIAIR's internal storage and, when present, its SD card and a USB drive. Nothing is written or deleted.</p>
     </div>
@@ -83,38 +83,38 @@
         <div class="card-title">What will be copied where</div>
         <div id="review-status-badge" class="badge">loading</div>
       </div>
-      <div id="quality-progress" class="progress-wrap" style="display:none; margin:0 0 14px;">
-        <div class="hint" id="quality-progress-label" style="margin:0 0 6px; color:var(--text);"></div>
+      <div id="quality-progress" class="progress-wrap">
+        <div class="hint" id="quality-progress-label"></div>
         <div class="progress-bar"><div class="progress-fill"></div></div>
         <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
       </div>
       <div id="review-summary"></div>
-      <div class="field-row" style="align-items:flex-end; margin-top:12px;">
-        <div class="field" style="flex:0 0 auto; margin-bottom:0;">
+      <div class="field-row align-end">
+        <div class="field field-fixed">
           <label for="quality-sigma">Outlier sensitivity: lower flags more frames</label>
-          <div style="display:flex; gap:10px; align-items:center;">
-            <input type="range" id="quality-sigma" step="0.5" min="2" max="8" style="width:220px;" />
+          <div class="inline-row gap-10">
+            <input type="range" id="quality-sigma" step="0.5" min="2" max="8" />
             <span id="quality-sigma-value" class="session-path"></span>
           </div>
         </div>
-        <div class="field hint" id="quality-status" style="margin-bottom:0;"></div>
+        <div class="field hint" id="quality-status"></div>
       </div>
       <p class="hint">Each light frame is scored against the rest of its group (star count, FWHM, eccentricity, SNR, sky background), the same way astro-stacker reviews lights. Red-bordered frames are recommended <b>not</b> to be ingested; click one to see why, and keep it if you disagree. Nothing is copied until you approve it on Copy &amp; verify.</p>
     </div>
 
-    <div class="card" id="decisions-card" style="display:none;">
+    <div class="card" id="decisions-card">
       <div class="card-header">
         <div class="card-title">Decisions</div>
         <div id="decisions-badge" class="badge"></div>
       </div>
-      <p class="hint" style="margin-top:0;">Frames the app can't file on its own wait here for an answer: a target it doesn't recognize, flats with no lights to go with, a very small group of lights, a damaged copy already on the NAS, or frames missing from a session that's already there. Where a safe default exists it's pre-selected; nothing under a decision is copied or deleted until it has an answer.</p>
+      <p class="hint flush-top">Frames the app can't file on its own wait here for an answer: a target it doesn't recognize, flats with no lights to go with, a very small group of lights, a damaged copy already on the NAS, or frames missing from a session that's already there. Where a safe default exists it's pre-selected; nothing under a decision is copied or deleted until it has an answer.</p>
       <div id="decisions-list"></div>
     </div>
 
     <div class="card">
       <div class="card-header">
         <div class="card-title">Sessions</div>
-        <div style="display:flex; gap:8px; align-items:center;">
+        <div class="inline-row">
           <div id="sessions-badge" class="badge"></div>
           <button id="quality-run-btn" class="small">Score light frames</button>
         </div>
@@ -123,7 +123,7 @@
       <div id="sessions-list"></div>
     </div>
 
-    <div class="card" id="library-card" style="display:none;">
+    <div class="card" id="library-card">
       <div class="card-header">
         <div class="card-title">Calibration library</div>
       </div>
@@ -154,7 +154,7 @@
       <div class="card-header"><div class="card-title">Where it goes</div><div id="copy-dests-badge" class="badge"></div></div>
       <div id="copy-dests"></div>
     </div>
-    <div class="card" id="copy-notincluded-card" style="display:none;">
+    <div class="card" id="copy-notincluded-card">
       <div class="card-header"><div class="card-title">Not in this copy</div></div>
       <div id="copy-notincluded"></div>
     </div>
@@ -167,7 +167,7 @@
       </div>
       <div id="catalog-summary"></div>
       <div id="catalog-progress" class="progress-wrap">
-        <div class="hint" id="catalog-progress-label" style="margin:0 0 6px; color:var(--text);"></div>
+        <div class="hint" id="catalog-progress-label"></div>
         <div class="progress-bar"><div class="progress-fill"></div></div>
         <div class="progress-label"><span class="pct">0%</span><span class="msg"></span></div>
       </div>
@@ -181,11 +181,11 @@
       <div class="card-header"><div class="card-title">What will be written</div><div id="catalog-changes-badge" class="badge"></div></div>
       <div id="catalog-changes"></div>
     </div>
-    <div class="card" id="catalog-gaps-card" style="display:none;">
+    <div class="card" id="catalog-gaps-card">
       <div class="card-header"><div class="card-title">Calibration gaps</div><div class="badge">report only</div></div>
       <div id="catalog-gaps"></div>
     </div>
-    <div class="card" id="catalog-log-card" style="display:none;">
+    <div class="card" id="catalog-log-card">
       <div class="card-header"><div class="card-title">Decision-log drafts</div><div class="badge">saved in the state folder</div></div>
       <div id="catalog-log"></div>
     </div>
@@ -194,12 +194,12 @@
     <div class="card">
       <div class="card-header">
         <div class="card-title" id="clean-title">Clean up the device</div>
-        <div style="display:flex; gap:8px; align-items:center;">
+        <div class="inline-row">
           <div id="clean-status-badge" class="badge"></div>
           <button id="clean-recommended-btn" class="small">Select recommended</button>
         </div>
       </div>
-      <p class="hint" style="margin-top:0;">Deletes only the files you tick; nothing is ticked for you. Each <code>.fit</code> goes with its <code>_thn.jpg</code>. Right before deleting, the device is listed again: files that changed, or that were written in the last 15 minutes (a capture in progress), are skipped, and every NAS copy is checked again. Nothing on the NAS is touched.</p>
+      <p class="hint flush-top">Deletes only the files you tick; nothing is ticked for you. Each <code>.fit</code> goes with its <code>_thn.jpg</code>. Right before deleting, the device is listed again: files that changed, or that were written in the last 15 minutes (a capture in progress), are skipped, and every NAS copy is checked again. Nothing on the NAS is touched.</p>
       <div id="clean-guard"></div>
       <div id="clean-activity"></div>
       <div id="clean-result"></div>
@@ -213,8 +213,8 @@
   <div class="stepbar-inner">
     <div class="stepbar-status" id="stepbar-status"></div>
     <div class="stepbar-actions">
-      <span class="hint" id="stepbar-why" style="margin:0;"></span>
-      <button id="stepbar-delete" class="danger" style="display:none;">Delete</button>
+      <span class="hint" id="stepbar-why"></span>
+      <button id="stepbar-delete" class="danger">Delete</button>
       <button id="stepbar-next" class="next">Next →</button>
     </div>
   </div>
@@ -229,16 +229,16 @@
   </div>
   <div class="lightbox-footer">
     <div class="lightbox-caption" id="lightbox-caption"></div>
-    <label class="lightbox-exclude-row" id="lightbox-exclude-row" style="display:none;">
+    <label class="lightbox-exclude-row" id="lightbox-exclude-row">
       <input type="checkbox" id="lightbox-exclude" /> Don't ingest this frame
     </label>
   </div>
 </div>
 
 <!-- Start over confirmation (proposal J): what's cleared and what's kept -->
-<div class="modal-overlay" id="start-over-modal" style="display:none;">
+<div class="modal-overlay" id="start-over-modal">
   <div class="card modal" role="dialog" aria-modal="true" aria-labelledby="so-title">
-    <div class="card-title" id="so-title" style="font-size:15px;">Start over?</div>
+    <div class="card-title" id="so-title">Start over?</div>
     <div id="so-body"></div>
     <label class="so-keep"><input type="checkbox" id="so-keep-answers" /> Keep decision answers (target names, replace, keep or release)</label>
     <div class="modal-actions">
@@ -249,7 +249,7 @@
 </div>
 
 <!-- a folder on this computer (proposal N1): the browser lists it and reads the files, the server never sees the disk -->
-<input type="file" id="folder-input" webkitdirectory directory multiple style="display:none;" />
+<input type="file" id="folder-input" webkitdirectory directory multiple />
 
 <script src="/app.js"></script>
 </body>

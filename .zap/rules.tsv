@@ -35,4 +35,3 @@
 # a false positive. Those values are checked against fixed lists / parsed as IP addresses and never reach SQL (every
 # query in db.py uses bound parameters); the "different results" were 409 vs 400 answers as ZAP's own requests
 # started and finished jobs. Kept because it's the rule that would catch a real injection.
-# 10055 (CSP: style-src unsafe-inline): the page uses style attributes. Moving them into styles.css would clear it.

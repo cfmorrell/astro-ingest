@@ -47,14 +47,16 @@ Server errors (HTTP 500) under attack, or anything High, are the ones to look at
   same temporary file). Fixed in 0.6: every state write gets its own temporary name.
 - **missing security headers** (CSP, `X-Frame-Options`, `X-Content-Type-Options`, cross-origin policies,
   `Permissions-Policy`): the app sets them on every response since 0.6 (`SECURITY_HEADERS` in `astro_ingest/api.py`).
-  The CSP keeps `'unsafe-inline'` for styles only, because the page sets style attributes; scripts are `'self'` only.
+  The CSP allows scripts and styles from the app itself only, nothing inline: the page has no style attributes
+  (`app.js` sets styles through `element.style`, which the CSP allows), checked by a test.
 - **High, "Source Code Disclosure - File Inclusion" (43):** a false positive. The flagged requests were answered
   400/404 with no file content. Left at WARN because it's the rule that would catch a real path bug.
 - **second scan (0.6):** the header alerts are gone. New: "SQL Injection" (40018) and "Spring4Shell" (40045), both
   false positives from timing: while ZAP's other requests had a job running, the same endpoint answered 409 ("a run
   is in progress") one moment and 400 ("bad value") the next, which ZAP read as its payload changing the result. No
   value it attacked reaches SQL (every query uses bound parameters), and Spring4Shell is a Java bug. "CSP: style-src
-  unsafe-inline" (10055) is the trade-off noted above.
+  unsafe-inline" (10055) is cleared: the page's inline styles moved into `styles.css` and `'unsafe-inline'` was
+  dropped.
 - **expected for this app**, set to IGNORE with reasons in `.zap/rules.tsv`: the ASIAIR's private IP, capture
   timestamps, Base64-looking names, plain HTTP (HTTPS comes from the proxy), client-error counts, and the
   informational rules.

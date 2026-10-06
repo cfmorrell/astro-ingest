@@ -330,3 +330,13 @@ def test_security_headers_on_every_response(tmp_path):
         for name, value in SECURITY_HEADERS.items():
             assert r.headers.get(name) == value, (path, name)
     assert "frame-ancestors 'none'" in SECURITY_HEADERS["Content-Security-Policy"]
+
+
+def test_page_has_no_inline_styles_or_scripts():
+    # the CSP (style-src/script-src 'self') blocks them: styles go in styles.css or through element.style
+    import re
+    from pathlib import Path
+    static = Path(__file__).resolve().parents[1] / "astro_ingest" / "static"
+    html, js = (static / "index.html").read_text(), (static / "app.js").read_text()
+    assert "style=" not in html and not re.search(r"<style|<script>| on[a-z]+=", html)
+    assert not re.search(r"""style=["'`]|setAttribute\(\s*["']style""", js)
