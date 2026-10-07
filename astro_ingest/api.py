@@ -44,10 +44,12 @@ SECURITY_HEADERS = {
 LOG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.log")   # a plain file name in STATE_DIR/logs (no paths)
 
 
-def _safe_rel(rel: str) -> str:
+def _safe_rel(rel: str, not_found: str) -> str:
+    # a path that can't be one of ours gets the same 404 as one that just isn't there: answering "bad path" for
+    # some names and "not found" for others is what ZAP's file-inclusion rule (43) reads as a file being found
     p = PurePosixPath(rel)
     if not rel or p.is_absolute() or ".." in p.parts:
-        raise HTTPException(400, "bad path")
+        raise HTTPException(404, not_found)
     return rel
 
 
@@ -133,7 +135,8 @@ def create_app(cfg: Config) -> FastAPI:
                  (key == analysis.SIGMA_KEY and (value is None or _is_sigma(value))) or \
                  (key in decisions and (value is None or _valid_decision_answer(decisions[key], value)))
             if not ok:
-                raise HTTPException(400, f"unsupported answer {key!r}={value!r}")
+                # the key, not the value: echoing what was sent made every bad value a different answer (ZAP rule 43)
+                raise HTTPException(400, f"unsupported answer for {key!r}")
         service.set_answers(cfg, updates)
         return plan_json(replan())
 
@@ -196,11 +199,12 @@ def create_app(cfg: Config) -> FastAPI:
     @app.post("/api/devices/select")
     def select_device(request: Request, host: str = Body(...), nickname: str | None = Body(None)):
         """Connect to a device from the last search."""
-        if busy():
-            raise HTTPException(409, f"a {busy()} run is in progress")
+        # input first, then "busy": the same request always gets the same answer (ZAP read 404 vs 409 as SQL injection)
         match = [d for d in found.get("devices", []) if d.host == host]
         if len(match) != 1:
             raise HTTPException(404, "no such device in the last search: search again")
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
         connected(service.remember_device(cfg, match[0], nickname))
         return devices_json(request)
 
@@ -208,13 +212,13 @@ def create_app(cfg: Config) -> FastAPI:
     def connect_device(request: Request, host: str = Body(...), nickname: str | None = Body(None)):
         """Connect to a device at one address: a recent device at its last address, or an address typed in. Never
         switches to something else: if nothing (or no capture device) answers there, it says so."""
-        if busy():
-            raise HTTPException(409, f"a {busy()} run is in progress")
         host = host.strip()
         try:
             ipaddress.ip_address(host)
         except ValueError:
-            raise HTTPException(400, f"{host!r} isn't an IP address") from None
+            raise HTTPException(400, "that isn't an IP address") from None
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
         known = next((r for r in service.recent_devices(cfg) if r["host"] == host), None)
         who = (known.get("nickname") or known.get("label")) if known else "Nothing"
         try:
@@ -299,13 +303,14 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.get("/api/thumb")
     def thumb(rel: str = Query(...)):
-        rel = _safe_rel(rel)
+        not_found = "no such thumbnail on the source"
+        rel = _safe_rel(rel, not_found)
         if not rel.endswith("_thn.jpg"):
-            raise HTTPException(400, "not a thumbnail path")
+            raise HTTPException(404, not_found)
         p = planned()
         entry = next((f.thumb for f in p.scan.frames if f.thumb and f.thumb.rel == rel), None)
         if entry is None:
-            raise HTTPException(404, "no such thumbnail on the source")
+            raise HTTPException(404, not_found)
         cached = cfg.cache_dir / "thumbs" / f"{hashlib.sha1(analysis.src_key(rel, entry.size, entry.mtime).encode()).hexdigest()}.jpg"
         if not cached.is_file():
             try:
@@ -422,10 +427,10 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.post("/api/cleanup/verify")
     def cleanup_verify(method: str = Body("quick", embed=True)):
-        if busy():
-            raise HTTPException(409, f"a {busy()} run is in progress")
         if method not in cleanup.VERIFY_METHODS:
             raise HTTPException(400, f"method must be one of {cleanup.VERIFY_METHODS}")
+        if busy():
+            raise HTTPException(409, f"a {busy()} run is in progress")
         p = planned()
 
         def work(progress) -> dict:
@@ -469,7 +474,7 @@ def create_app(cfg: Config) -> FastAPI:
             raise HTTPException(400, "give exactly one of rel= or nas=")
         p = planned()
         if rel is not None:
-            rel = _safe_rel(rel)
+            rel = _safe_rel(rel, "not a frame on the source")
             frame = next((f for f in p.scan.frames if f.rel == rel), None)
             item = next((i for i in p.plan.items if i.src == rel), None)
             if frame is None or item is None or item.kind not in FRAME_KINDS:
@@ -482,7 +487,7 @@ def create_app(cfg: Config) -> FastAPI:
                 raise HTTPException(409, "not staged: use the device's thumbnail")
             opener, kind = (lambda: src.open_read(rel)), item.kind
         else:
-            nas = _safe_rel(nas)
+            nas = _safe_rel(nas, "not a frame on the NAS")
             files = [f for fl in p.index.files.values() for f in fl if f.rel == nas]
             if not files or not nas.lower().endswith((".fit", ".fits")):
                 raise HTTPException(404, "not a frame on the NAS")

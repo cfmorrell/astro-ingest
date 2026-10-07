@@ -28,10 +28,15 @@
 # answered 400 to the payload but 409 ("a run is in progress") to ZAP's baseline request:
 40045	IGNORE	(Spring4Shell)
 #
-# Kept at WARN on purpose:
-# 43 (Source Code Disclosure - File Inclusion) was a false positive on /api/preview?rel= and POST /api/answers
-# (they answered 400/404 and returned no file content), but it's the rule that would catch a real path bug there.
-# 40018 (SQL Injection), second scan, on POST /api/cleanup/verify (method) and /api/devices/connect|select (host):
-# a false positive. Those values are checked against fixed lists / parsed as IP addresses and never reach SQL (every
-# query in db.py uses bound parameters); the "different results" were 409 vs 400 answers as ZAP's own requests
-# started and finished jobs. Kept because it's the rule that would catch a real injection.
+# Kept at WARN on purpose, everywhere: their false positives were fixed in the app (2026-10-07) rather than ignored, so the
+# rules still catch a real case on any endpoint, these included:
+# 43 (Source Code Disclosure - File Inclusion) on /api/preview, /api/thumb and POST /api/answers: a path that can't be
+#    ours answered "bad path" (400) and an unknown one "not found" (404), and bad answers echoed the value sent; ZAP
+#    read the different answers as a file being found. Now every path that isn't a known frame gets one 404, and the
+#    value isn't echoed.
+# 40018 (SQL Injection) on POST /api/cleanup/verify and /api/devices/connect|select: they checked "a run is in
+#    progress" (409) before their input (400/404), so ZAP's own jobs changed the answer to the same attack. Input is
+#    checked first now. Nothing they take reaches SQL (every query in db.py uses bound parameters).
+#
+# To silence one rule on one URL only (e.g. a confirmed false positive that can't be fixed), ZAP's packaged scans
+# also take: <rule id>	OUTOFSCOPE	<URL regex>

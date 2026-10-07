@@ -57,6 +57,10 @@ Server errors (HTTP 500) under attack, or anything High, are the ones to look at
   value it attacked reaches SQL (every query uses bound parameters), and Spring4Shell is a Java bug. "CSP: style-src
   unsafe-inline" (10055) is cleared: the page's inline styles moved into `styles.css` and `'unsafe-inline'` was
   dropped.
+- **third scan (0.7):** only "SQL Injection" (40018) and "Source Code Disclosure" (43) left above Low, both false
+  positives. Rather than ignore them, the app now gives ZAP no reason to raise them, so both rules stay on for every
+  endpoint: input is checked before "a run is in progress", every path that isn't a known frame or thumbnail gets the
+  same 404, and a bad answer's value isn't echoed back. Tests pin each of these down.
 - **expected for this app**, set to IGNORE with reasons in `.zap/rules.tsv`: the ASIAIR's private IP, capture
   timestamps, Base64-looking names, plain HTTP (HTTPS comes from the proxy), client-error counts, and the
   informational rules.
@@ -69,6 +73,8 @@ Nginx Proxy Manager with authentication in front of it.
 - **`.zap/rules.tsv`**: one line per rule id: `IGNORE` (reviewed, doesn't apply), `WARN` (the default), or `FAIL`.
   `IGNORE` turns an active rule off, but a passive rule still runs and still appears in ZAP's reports; it just no
   longer counts as a warning or failure in the job's results.
+- **One rule on one URL:** a line `<rule id>	OUTOFSCOPE	<URL regex>` ignores that rule's alerts on matching URLs only,
+  so it still runs everywhere else. For a confirmed false positive the app can't avoid; prefer fixing the cause.
 - **Fail the run on findings:** set `fail_action: true` in the workflow; with it, alerts make the job fail (and rules
   set to `FAIL` always do).
 - **A GitHub issue with the results:** set `allow_issue_writing: true` and add `issues: write` to the workflow's

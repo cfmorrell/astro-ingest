@@ -47,10 +47,38 @@ def test_previews(tmp_path):
     assert r.status_code == 200 and r.headers["content-type"] == "image/png"
     assert list((root / "state" / "cache" / "previews").glob("*-320.png"))   # cached in CACHE_DIR
     assert client.get("/api/preview", params={"rel": rel, "size": 123}).status_code == 400
-    assert client.get("/api/preview", params={"rel": "../x.fit"}).status_code == 400
     assert client.get("/api/preview", params={"rel": "Plan/missing.fit"}).status_code == 404
     thumb = next(air.rglob("*_thn.jpg")).relative_to(air).as_posix()
     assert client.get("/api/preview", params={"rel": thumb}).status_code == 404   # not a frame
+
+
+def test_paths_that_cant_be_ours_answer_like_missing_ones(tmp_path):
+    # one answer for every path that isn't a known frame or thumbnail, traversal included (ZAP rule 43 false positive)
+    client, air, root = make_app(tmp_path)
+    for endpoint, missing in (("/api/preview", "Plan/missing.fit"), ("/api/thumb", "Plan/missing_thn.jpg")):
+        want = client.get(endpoint, params={"rel": missing})
+        assert want.status_code == 404
+        for bad in ("../x.fit", "/preview", "/etc/passwd", "../../answers.json", "vmhlmeejudopfwqnukte", ""):
+            r = client.get(endpoint, params={"rel": bad})
+            assert (r.status_code, r.json()) == (404, want.json()), (endpoint, bad)
+    r = client.get("/api/preview", params={"nas": "../Z95-ClaudeReferences/targets.csv"})
+    assert r.status_code == 404 and r.json()["detail"] == "not a frame on the NAS"
+
+
+def test_bad_input_gets_the_same_answer_whether_or_not_a_job_runs(tmp_path, monkeypatch):
+    # input is checked before "a run is in progress" (ZAP read 400-or-409 by timing as SQL injection)
+    from astro_ingest import jobs
+    client, air, root = make_app(tmp_path)
+    bad = [("/api/cleanup/verify", {"method": "quick OR 1=1 -- "}, 400),
+           ("/api/devices/connect", {"host": "John Doe AND 1=1 -- "}, 400),
+           ("/api/devices/select", {"host": "John Doe AND 1=1 -- "}, 404)]
+    idle = [(client.post(u, json=b).status_code, client.post(u, json=b).json()) for u, b, _ in bad]
+    monkeypatch.setattr(jobs, "running", lambda kind=None: object())            # every kind of job "running"
+    for (u, b, code), before in zip(bad, idle):
+        r = client.post(u, json=b)
+        assert r.status_code == code and (r.status_code, r.json()) == before, u
+    r = client.post("/api/answers", json={"quality-sigma": "answers"})
+    assert (r.status_code, r.json()["detail"]) == (400, "unsupported answer for 'quality-sigma'")   # the value isn't echoed
 
 
 def test_answers_endpoint(tmp_path):
