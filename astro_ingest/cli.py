@@ -341,8 +341,7 @@ def cmd_catalog(args: argparse.Namespace) -> int:
             print(f"  {c.status:7s} {c.kind:13s} {c.path}{' -> ' + c.target if c.target else ''}"
                   f"{'  (' + c.why + ')' if c.why else ''}")
     for g in pv.gaps:
-        print(f"  calibration gap: {g['session']}: {g['kind']} {g['camera']} {g['exposure']}s gain {g['gain']} "
-              f"offset {g['offset']}: {g['problem']}")
+        print(f"  calibration gap: {g['session']}: {g['why']} {g['todo']} Filed in {g['file_to']}")
     for line in pv.log_lines:
         print(f"  decision log: {line}")
     if not args.yes or not sm["writes"]:

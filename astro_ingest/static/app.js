@@ -296,14 +296,17 @@ function wantIngest(item, ingest) {
 let lightboxZoomed = false;
 let lightboxNav = null;  // { srcs: [...], index }
 
-function openLightbox(url, title, { stats, indicator } = {}) {
+function openLightbox(url, title, { stats, indicator, keepView } = {}) {
+  // keepView: the same frame again after an answer (Don't ingest), so zoom and position stay where they were
   const img = document.getElementById("lightbox-img");
   const scroll = document.getElementById("lightbox-scroll");
-  img.src = url;
-  lightboxZoomed = false;
-  scroll.classList.remove("zoomed");
-  scroll.scrollTop = 0;
-  scroll.scrollLeft = 0;
+  if (!keepView || img.getAttribute("src") !== url) img.src = url;
+  if (!keepView) {
+    lightboxZoomed = false;
+    scroll.classList.remove("zoomed");
+    scroll.scrollTop = 0;
+    scroll.scrollLeft = 0;
+  }
   const captionEl = document.getElementById("lightbox-caption");
   captionEl.className = `lightbox-caption${indicator ? ` ${indicator}` : ""}`;
   captionEl.innerHTML = "";
@@ -312,7 +315,7 @@ function openLightbox(url, title, { stats, indicator } = {}) {
   document.getElementById("lightbox").classList.add("open");
 }
 
-function renderLightboxFrame() {
+function renderLightboxFrame(keepView = false) {
   if (!lightboxNav) return;
   const item = state.itemsBySrc[lightboxNav.srcs[lightboxNav.index]];
   if (!item) return;
@@ -322,6 +325,7 @@ function renderLightboxFrame() {
   openLightbox(previewUrl(item, FULL) || "", `${basename(item.src)}${q ? ` — ${date} ${time}` : ""}`, {
     stats: isLight ? `${frameStatsLine(item)}${item.reason ? `  ·  ${item.reason}` : ""}` : `${actionLabel(item)}${item.reason ? ` · ${item.reason}` : ""}`,
     indicator: isLight && q ? (isFlagged(item) ? "flagged" : "ok") : null,
+    keepView,
   });
   const canChoose = isLight && ["copy", "append", "rejected"].includes(item.action);
   document.getElementById("lightbox-exclude-row").style.display = canChoose ? "flex" : "none";
@@ -360,7 +364,7 @@ document.getElementById("lightbox-exclude").addEventListener("change", async (e)
   if (!lightboxNav) return;
   const item = state.itemsBySrc[lightboxNav.srcs[lightboxNav.index]];
   await setFrameChoice([item], (i) => wantIngest(i, !e.target.checked));
-  renderLightboxFrame();
+  renderLightboxFrame(true);
 });
 document.getElementById("lightbox-scroll").addEventListener("click", (e) => {
   // As astro-stacker: toggle zoom, centred on where you clicked, instead of closing
@@ -1034,6 +1038,14 @@ function roughTime(bytes) {
   return `about ${h} h${m ? ` ${m} min` : ""}`;
 }
 
+function groupSpec(g) {
+  // what tells a group's frames apart within one night of one target (e.g. a narrowband run: R, G, B, Ha, OIII):
+  // "2600MM · filter Ha · 300 s"
+  if (!g) return "";
+  const exp = g.exposure_s === null || g.exposure_s === undefined ? null : `${Number(g.exposure_s.toFixed(2))} s`;
+  return [g.camera || "camera ?", g.filter ? `filter ${g.filter}` : "no filter", exp].filter(Boolean).join(" · ");
+}
+
 function setsForSelect(p) {
   const sets = [];
   p.groups.forEach((g) => {
@@ -1042,9 +1054,12 @@ function setsForSelect(p) {
     items.sort((a, b) => captureStamp(a.src).localeCompare(captureStamp(b.src)));
     const where = g.dst_folders.length ? g.dst_folders[0].replace(/\/(lights|flats|darkflats)(-[^/]+)?$/, "") : null;
     const what = g.kind === "lights" ? `${g.object || "lights"} lights` : g.kind;
-    sets.push({ id: g.id, night: g.night || "", title: where || `${what} · night of ${g.night} (target to be decided)`, kind: g.kind, what, items });
+    sets.push({ id: g.id, night: g.night || "", title: where || `${what} · night of ${g.night} (target to be decided)`, kind: g.kind, what,
+                spec: groupSpec(g), items });
   });
-  return sets.sort((a, b) => (a.night + a.title).localeCompare(b.night + b.title));
+  // by night and session as before; within a session lights first, then by camera · filter · exposure
+  const rank = (k) => (k === "lights" ? "0" : "1");
+  return sets.sort((a, b) => (a.night + a.title + rank(a.kind) + a.spec).localeCompare(b.night + b.title + rank(b.kind) + b.spec));
 }
 
 const pendingExclusions = {};
@@ -1105,6 +1120,7 @@ function renderSelect() {
       el("div", { class: "set-header" }, [
         el("span", { class: `badge ${set.kind === "lights" ? "accent" : ""}` }, [set.what]),
         el("span", { class: "session-path" }, [set.title]),
+        el("span", { class: "group-spec" }, [set.spec]),
         el("span", { class: "hint", style: "margin:0;" }, [`${inSet.length} of ${set.items.length} selected · ${gb(setBytes)}`]),
         el("button", {
           class: "small ghost", style: "margin-left:auto;",
@@ -1441,8 +1457,31 @@ function renderCatalog() {
   const gaps = document.getElementById("catalog-gaps");
   gaps.innerHTML = "";
   document.getElementById("catalog-gaps-card").style.display = pv.gaps.length ? "block" : "none";
-  pv.gaps.forEach((g) => gaps.appendChild(el("div", { class: "session-mismatch-warning" }, [
-    `⚠ ${g.kind} ${g.camera || "?"}${g.kind === "Dark" ? ` ${g.exposure}s` : ""} gain ${g.gain} offset ${g.offset}: ${g.problem} — ${g.session}`])));
+  // one entry per calibration set needed (several sessions can need the same one): what, why, what to shoot, where
+  // it's filed, and which sessions use it (Chris, 2026-10-08: "be more clear on what is needed")
+  const needs = new Map();
+  pv.gaps.forEach((g) => {
+    const key = [g.kind, g.camera, g.exposure, g.gain, g.offset, g.temp_c, g.problem].join("|");
+    if (!needs.has(key)) needs.set(key, { ...g, sessions: [] });
+    needs.get(key).sessions.push(g.session);
+  });
+  needs.forEach((g) => {
+    const what = g.kind === "Dark" ? `${g.exposure} s darks` : "Bias frames";
+    const spec = [g.camera || "camera ?", `gain ${g.gain}`, `offset ${g.offset}`, g.temp_c !== null && g.temp_c !== undefined ? `${g.temp_c} °C` : null].filter(Boolean).join(" · ");
+    const problem = g.problem === "missing" ? "missing" : g.problem.startsWith("only offset") ? "wrong offset" : "wrong temperature";
+    gaps.appendChild(el("div", { class: "gap-item" }, [
+      el("div", { class: "gap-head" }, [
+        el("span", { class: "badge warn" }, [problem]),
+        el("strong", {}, [`${what} needed`]),
+        el("span", { class: "group-spec" }, [spec]),
+      ]),
+      el("div", { class: "gap-line" }, [el("span", { class: "gap-label" }, ["Why"]), g.why]),
+      el("div", { class: "gap-line" }, [el("span", { class: "gap-label" }, ["To do"]), g.todo]),
+      el("div", { class: "gap-line" }, [el("span", { class: "gap-label" }, ["Filed in"]), el("code", {}, [g.file_to])]),
+      el("div", { class: "gap-line" }, [el("span", { class: "gap-label" }, [g.sessions.length === 1 ? "Session" : "Sessions"]),
+        el("span", { class: "session-path" }, [g.sessions.join(", ")])]),
+    ]));
+  });
   const log = document.getElementById("catalog-log");
   log.innerHTML = "";
   document.getElementById("catalog-log-card").style.display = pv.log_lines.length ? "block" : "none";
@@ -1889,6 +1928,7 @@ function renderDecisions(p) {
     const header = el("div", { class: "decision-header", onclick: toggle, title: collapsed ? "expand" : "collapse" }, [
       el("span", { class: "decision-chevron" }, [collapsed ? "▸" : "▾"]),
       el("span", { class: `badge ${d.resolved === null ? "warn" : "accent"}` }, [d.title || d.kind]),
+      groupsById[d.group] ? el("span", { class: "group-spec" }, [groupSpec(groupsById[d.group])]) : null,
       el("span", { class: "hint", style: "margin:0;" }, [d.answer !== null ? `answered: ${answerText(d, d.answer)}` : d.resolved === null ? "needs an answer" : `default: ${answerText(d, d.resolved)}`]),
       d.answer !== null ? el("span", {
         class: "toggle-adv", style: "margin:0 0 0 auto;",
@@ -1946,12 +1986,15 @@ function renderSessions(p) {
     sess.groups.map((id) => groupsById[id]).filter(Boolean).forEach((g) => {
       const items = g.items.map((src) => state.itemsBySrc[src]).filter(Boolean);
       if (g.kind === "lights") {
+        block.appendChild(el("div", { class: "group-heading" }, [
+          "lights · ", el("span", { class: "group-spec" }, [groupSpec(g)]), ` · ${items.length} frames`]));
         block.appendChild(qualityToolbar(g, items));
         block.appendChild(frameStrip(g.id, items));
       } else {
         const going = items.filter((i) => i.dsts.some((d) => d.startsWith(prefix)));
         if (going.length) {
-          block.appendChild(el("div", { class: "hint", style: "margin-top:8px;" }, [`${g.kind} · ${going.length} frames`]));
+          block.appendChild(el("div", { class: "group-heading" }, [
+            `${g.kind} · `, el("span", { class: "group-spec" }, [groupSpec(g)]), ` · ${going.length} frames`]));
           block.appendChild(frameStrip(`${g.id}-${sess.rel}`, going));
         }
       }
